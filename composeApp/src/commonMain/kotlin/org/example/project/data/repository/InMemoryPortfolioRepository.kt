@@ -17,6 +17,8 @@ import org.example.project.domain.model.PositionSnapshot
 import org.example.project.domain.model.Transaction
 import org.example.project.domain.model.TransactionType
 import org.example.project.presentation.state.PortfolioState
+import kotlin.math.abs
+import kotlin.math.roundToLong
 
 /**
  * Implementación en memoria del PortfolioRepository.
@@ -39,14 +41,15 @@ class InMemoryPortfolioRepository(
 
     companion object {
         private const val COMMISSION_RATE = 0.005 // 0.5%
+        private const val EPS = 1e-9
     }
 
-    // Scope interno (si no nos pasan uno)
-    private val job = SupervisorJob()
+    // Scope interno SOLO si no nos pasan uno
+    private val job: Job? = if (externalScope == null) SupervisorJob() else null
     private val scope: CoroutineScope =
-        externalScope ?: CoroutineScope(Dispatchers.Default + job)
+        externalScope ?: CoroutineScope(Dispatchers.Default + job!!)
 
-    // Lock de consistencia
+    // Lock de consistencia (cash + holdings + transactions + state)
     private val mutex = Mutex()
 
     // Estado interno “fuente de verdad”
@@ -61,6 +64,7 @@ class InMemoryPortfolioRepository(
         PortfolioState(
             cash = cash,
             holdings = emptyList(),
+            positions = emptyList(),
             transactions = emptyList(),
             portfolioValue = cash,
             pnlEuro = 0.0,
@@ -72,12 +76,12 @@ class InMemoryPortfolioRepository(
     private var pricesJob: Job? = null
 
     init {
-        // Recalcular “live” cuando cambian precios
+        // Recalcular “live” cuando cambian precios (solo si tenemos holdings del ticker)
         pricesJob = scope.launch {
             marketRepo.priceUpdates.collect { update ->
+                val t = normalizeTicker(update.ticker)
                 mutex.withLock {
-                    // Optimización: si no tenemos esa acción, no recalculamos
-                    if (!holdingsMap.containsKey(update.ticker)) return@withLock
+                    if (!holdingsMap.containsKey(t)) return@withLock
                     emitPortfolioStateLocked()
                 }
             }
@@ -89,23 +93,24 @@ class InMemoryPortfolioRepository(
     // ============================================================
 
     override suspend fun previewBuy(ticker: String, quantity: Int): Result<TransactionPreview> {
+        val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
-        val price = marketRepo.getSnapshot(ticker)?.currentPrice
-            ?: return Result.failure(UnknownTicker(ticker))
+        val snap = marketRepo.getSnapshot(t) ?: return Result.failure(UnknownTicker(t))
+        val price = snap.currentPrice
 
         val gross = price * quantity
         val commission = gross * COMMISSION_RATE
         val net = gross + commission
 
         val available = mutex.withLock { cash }
-        if (available + 1e-9 < net) {
+        if (available + EPS < net) {
             return Result.failure(InsufficientCash(required = net, available = available))
         }
 
         return Result.success(
             TransactionPreview(
-                ticker = ticker,
+                ticker = t,
                 quantity = quantity,
                 pricePerShare = price,
                 grossTotal = gross,
@@ -116,13 +121,14 @@ class InMemoryPortfolioRepository(
     }
 
     override suspend fun previewSell(ticker: String, quantity: Int): Result<TransactionPreview> {
+        val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
-        val owned = mutex.withLock { holdingsMap[ticker]?.quantity ?: 0 }
-        if (owned < quantity) return Result.failure(InsufficientHoldings(ticker, quantity, owned))
+        val owned = mutex.withLock { holdingsMap[t]?.quantity ?: 0 }
+        if (owned < quantity) return Result.failure(InsufficientHoldings(t, quantity, owned))
 
-        val price = marketRepo.getSnapshot(ticker)?.currentPrice
-            ?: return Result.failure(UnknownTicker(ticker))
+        val snap = marketRepo.getSnapshot(t) ?: return Result.failure(UnknownTicker(t))
+        val price = snap.currentPrice
 
         val gross = price * quantity
         val commission = gross * COMMISSION_RATE
@@ -130,7 +136,7 @@ class InMemoryPortfolioRepository(
 
         return Result.success(
             TransactionPreview(
-                ticker = ticker,
+                ticker = t,
                 quantity = quantity,
                 pricePerShare = price,
                 grossTotal = gross,
@@ -145,38 +151,44 @@ class InMemoryPortfolioRepository(
     // ============================================================
 
     override suspend fun buy(ticker: String, quantity: Int): Result<Transaction> {
+        val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
-        val price = marketRepo.getSnapshot(ticker)?.currentPrice
-            ?: return Result.failure(UnknownTicker(ticker))
-
-        val gross = price * quantity
-        val commission = gross * COMMISSION_RATE
-        val net = gross + commission
-
         return mutex.withLock {
-            if (cash + 1e-9 < net) {
+            // Precio “real” al confirmar (dentro del lock para coherencia del estado)
+            val snap = marketRepo.getSnapshot(t) ?: return@withLock Result.failure(UnknownTicker(t))
+            val price = snap.currentPrice
+
+            val gross = price * quantity
+            val commission = gross * COMMISSION_RATE
+            val net = gross + commission
+
+            if (cash + EPS < net) {
                 return@withLock Result.failure(InsufficientCash(required = net, available = cash))
             }
 
             cash -= net
+            if (cash in -EPS..0.0) cash = 0.0
 
-            val current = holdingsMap[ticker]
+            val current = holdingsMap[t]
             val newHolding = if (current == null) {
-                Holding(ticker = ticker, quantity = quantity, avgBuyPrice = price)
+                Holding(ticker = t, quantity = quantity, avgBuyPrice = price)
             } else {
                 val oldQty = current.quantity
                 val newQty = oldQty + quantity
-                val newAvg = ((current.avgBuyPrice * oldQty) + (price * quantity)) / newQty.toDouble()
-                Holding(ticker = ticker, quantity = newQty, avgBuyPrice = newAvg)
+                val newAvg =
+                    ((current.avgBuyPrice * oldQty) + (price * quantity)) / newQty.toDouble()
+                current.copy(quantity = newQty, avgBuyPrice = newAvg)
             }
-            holdingsMap[ticker] = newHolding
+            holdingsMap[t] = newHolding
 
             val tx = Transaction(
                 id = nextTxId++,
                 timestamp = Clock.System.now(),
                 type = TransactionType.BUY,
-                ticker = ticker,
+                ticker = t,
+                companyName = snap.name,
+                sector = snap.sector,
                 quantity = quantity,
                 pricePerShare = price,
                 grossTotal = gross,
@@ -191,25 +203,26 @@ class InMemoryPortfolioRepository(
     }
 
     override suspend fun sell(ticker: String, quantity: Int): Result<Transaction> {
+        val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
-        val price = marketRepo.getSnapshot(ticker)?.currentPrice
-            ?: return Result.failure(UnknownTicker(ticker))
-
-        val gross = price * quantity
-        val commission = gross * COMMISSION_RATE
-        val net = gross - commission
-
         return mutex.withLock {
-            val current = holdingsMap[ticker]
+            val current = holdingsMap[t]
             val owned = current?.quantity ?: 0
             if (owned < quantity) {
-                return@withLock Result.failure(InsufficientHoldings(ticker, quantity, owned))
+                return@withLock Result.failure(InsufficientHoldings(t, quantity, owned))
             }
 
+            val snap = marketRepo.getSnapshot(t) ?: return@withLock Result.failure(UnknownTicker(t))
+            val price = snap.currentPrice
+
+            val gross = price * quantity
+            val commission = gross * COMMISSION_RATE
+            val net = gross - commission
+
             val remaining = owned - quantity
-            if (remaining == 0) holdingsMap.remove(ticker)
-            else holdingsMap[ticker] = current!!.copy(quantity = remaining)
+            if (remaining == 0) holdingsMap.remove(t)
+            else holdingsMap[t] = current!!.copy(quantity = remaining)
 
             cash += net
 
@@ -217,7 +230,9 @@ class InMemoryPortfolioRepository(
                 id = nextTxId++,
                 timestamp = Clock.System.now(),
                 type = TransactionType.SELL,
-                ticker = ticker,
+                ticker = t,
+                companyName = snap.name,
+                sector = snap.sector,
                 quantity = quantity,
                 pricePerShare = price,
                 grossTotal = gross,
@@ -248,10 +263,10 @@ class InMemoryPortfolioRepository(
                     append(t.type).append(',')
                     append(t.ticker).append(',')
                     append(t.quantity).append(',')
-                    append(String.format("%.6f", t.pricePerShare)).append(',')
-                    append(String.format("%.6f", t.grossTotal)).append(',')
-                    append(String.format("%.6f", t.commission)).append(',')
-                    append(String.format("%.6f", t.netTotal))
+                    append(fmt6(t.pricePerShare)).append(',')
+                    append(fmt6(t.grossTotal)).append(',')
+                    append(fmt6(t.commission)).append(',')
+                    append(fmt6(t.netTotal))
                     appendLine()
                 }
             }
@@ -269,6 +284,7 @@ class InMemoryPortfolioRepository(
         _portfolioState.value = PortfolioState(
             cash = snap.cash,
             holdings = snap.holdings,
+            positions = snap.positions,
             transactions = transactions.toList(),
             portfolioValue = snap.portfolioValue,
             pnlEuro = snap.pnlEuro,
@@ -280,7 +296,9 @@ class InMemoryPortfolioRepository(
         val holdingsList = holdingsMap.values.toList()
 
         val positions = holdingsList.map { h ->
-            val currentPrice = marketRepo.getSnapshot(h.ticker)?.currentPrice ?: 0.0
+            // Si falta snapshot, usamos avgBuyPrice como fallback para evitar 0.0 “raros”
+            val currentPrice = marketRepo.getSnapshot(h.ticker)?.currentPrice ?: h.avgBuyPrice
+
             val invested = h.avgBuyPrice * h.quantity
             val valueNow = currentPrice * h.quantity
             val pnlEuro = valueNow - invested
@@ -316,6 +334,24 @@ class InMemoryPortfolioRepository(
         )
     }
 
+    private fun normalizeTicker(raw: String): String =
+        raw.trim().uppercase()
+
+    /**
+     * Formato CSV multiplataforma (siempre con '.' y 6 decimales)
+     * sin Locale/String.format.
+     */
+    private fun fmt6(value: Double): String {
+        val sign = if (value < 0) "-" else ""
+        val absValue = abs(value)
+
+        val scaled = (absValue * 1_000_000.0).roundToLong()
+        val integer = scaled / 1_000_000
+        val frac = (scaled % 1_000_000).toInt()
+
+        return "$sign$integer.${frac.toString().padStart(6, '0')}"
+    }
+
     /**
      * Opcional (Desktop onClose / Android onDestroy).
      * Si el scope es externo, NO lo cancelamos.
@@ -323,6 +359,6 @@ class InMemoryPortfolioRepository(
     fun close() {
         pricesJob?.cancel()
         pricesJob = null
-        if (externalScope == null) job.cancel()
+        job?.cancel()
     }
 }

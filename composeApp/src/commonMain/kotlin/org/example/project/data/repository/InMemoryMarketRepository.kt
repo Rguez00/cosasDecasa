@@ -26,7 +26,10 @@ class InMemoryMarketRepository(
 
     // Orden estable para UI (evita sort en cada publish)
     private val orderedTickers: List<String> =
-        initialStocks.map { it.ticker }.distinct().sorted()
+        initialStocks
+            .map { normalizeTicker(it.ticker) }
+            .distinct()
+            .sorted()
 
     // Bias global por tick (% aprox). Ej: +0.10 => +0.10% por tick
     @Volatile
@@ -61,11 +64,12 @@ class InMemoryMarketRepository(
     // =========================
     init {
         initialStocks.forEach { stock ->
+            val t = normalizeTicker(stock.ticker)
             val price = stock.initialPrice
 
             val snap = StockSnapshot(
                 name = stock.name,
-                ticker = stock.ticker,
+                ticker = t,
                 sector = stock.sector,
                 volatility = stock.volatility,
 
@@ -81,7 +85,7 @@ class InMemoryMarketRepository(
                 priceHistory = listOf(price)
             )
 
-            snapshots.put(stock.ticker, snap)
+            snapshots.put(t, snap)
         }
 
         // Inicializamos bias de sectores a 0
@@ -96,14 +100,17 @@ class InMemoryMarketRepository(
     // MarketRepository implementation
     // =========================
     override fun getSnapshot(ticker: String): StockSnapshot? =
-        snapshots.get(ticker)
+        snapshots.get(normalizeTicker(ticker))
 
     override fun updateSnapshot(ticker: String, newSnapshot: StockSnapshot) {
-        // Guardamos snapshot
-        snapshots.put(ticker, newSnapshot)
+        val t = normalizeTicker(ticker)
+
+        // Guardamos snapshot (forzamos ticker normalizado por seguridad)
+        val safeSnapshot = if (newSnapshot.ticker == t) newSnapshot else newSnapshot.copy(ticker = t)
+        snapshots.put(t, safeSnapshot)
 
         // Flow de cambios de precios (requisito)
-        _priceUpdates.tryEmit(newSnapshot)
+        _priceUpdates.tryEmit(safeSnapshot)
 
         // Publicación consolidada para UI (lista estable)
         publish()
@@ -175,6 +182,7 @@ class InMemoryMarketRepository(
     // Helper opcional (seguro)
     // =========================
     suspend fun expireSectorBiasLater(sector: Sector, delayMs: Long) {
+        if (delayMs <= 0) return
         // Capturamos el bias actual para no borrar uno “nuevo” posterior
         val expected = getSectorBiasPercent(sector)
         delay(delayMs)
@@ -182,4 +190,7 @@ class InMemoryMarketRepository(
             setSectorBias(sector, 0.0)
         }
     }
+
+    private fun normalizeTicker(raw: String): String =
+        raw.trim().uppercase()
 }
