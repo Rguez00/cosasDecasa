@@ -318,12 +318,12 @@ fun App() {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Cyan)
+                        .background(Color.Gray)
                         .windowInsetsPadding(
                             WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Bottom)
                         )
                         .padding(pad),
-                    color = Color.Cyan
+                    color = Color.Gray
                 ) {
                     val outerPad = 6.dp
                     val innerPadH = 8.dp
