@@ -3,7 +3,13 @@ package org.example.project
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,12 +26,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.example.project.core.config.InitialData
 import org.example.project.data.repository.InMemoryMarketRepository
+import org.example.project.data.repository.InMemoryPortfolioRepository
 import org.example.project.domain.model.NewsEvent
+import org.example.project.domain.model.StockSnapshot
 import org.example.project.engine.MarketEngine
+import org.example.project.presentation.ui.TradeDialog
+import org.example.project.presentation.vm.PortfolioViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import kotlin.math.abs
 
 @Composable
 @Preview
@@ -33,39 +46,44 @@ fun App() {
     val marketRepo = remember { InMemoryMarketRepository(InitialData.defaultStocks()) }
     val engine = remember { MarketEngine(marketRepo) }
 
+    val portfolioRepo = remember { InMemoryPortfolioRepository(marketRepo) }
+    val portfolioVm = remember { PortfolioViewModel(portfolioRepo) }
+
     LaunchedEffect(Unit) { engine.startAllTickers() }
+    DisposableEffect(Unit) {
+        onDispose {
+            engine.close()
+            portfolioVm.close()
+        }
+    }
 
     val marketState by engine.marketState.collectAsState()
-    val featured = marketState.stocks.firstOrNull { it.ticker == "NBS" }
+    val portfolioState by portfolioVm.portfolioState.collectAsState()
+
+    var selectedTicker by remember { mutableStateOf("NBS") }
+    val featured: StockSnapshot? =
+        marketState.stocks.firstOrNull { it.ticker == selectedTicker } ?: marketState.stocks.firstOrNull()
 
     // =========================================================
-    // PALETA (fondo metálico claro + tarjetas dark fintech)
+    // PALETA (más contraste) + layout apretado
     // =========================================================
+    val bgTop = Color(0xFF050A14)
+    val surface0 = Color(0xFF0A1222)
+    val surface1 = Color(0xFF0E1B33)
+    val surface2 = Color(0xFF142B4F)
+    val stroke = Color(0x44FFFFFF)
+    val strokeSoft = Color(0x2EFFFFFF)
 
-    // ✅ Fondo metálico uniforme (tipo “metal” claro)
-    val metalBase = Color(0xFFC7CCD3) // gris metálico claro (uniforme)
+    val brand = Color(0xFF38BDF8)
+    val brand2 = Color(0xFF6366F1)
 
-    // Cards dark
-    val surface0 = Color(0xFF0D1628) // cards
-    val surface1 = Color(0xFF0F1C33) // inner blocks
-    val stroke = Color(0x22FFFFFF)   // borde suave en dark
+    val success = Color(0xFF22C55E)
+    val danger = Color(0xFFFB7185)
+    val neutral = Color(0xFF94A3B8)
 
-    // Accents
-    val brand = Color(0xFF38BDF8)   // cyan
-    val brand2 = Color(0xFF6366F1)  // indigo
-    val success = Color(0xFF22C55E) // green
-    val danger = Color(0xFFFB7185)  // rose
-    val neutral = Color(0xFF94A3B8) // slate-400
-
-    // ✅ Textos para CARDS dark
-    val cardTextStrong = Color(0xFFE2E8F0) // slate-200
-    val cardTextSoft = Color(0xFFB6C2D2)   // más suave (no igual que strong)
-    val cardTextMuted = Color(0xFF7B8AA1)  // muted
-
-    // ✅ Textos para HEADER sobre metal claro (alto contraste)
-    val headerTitle = Color(0xFF0B1220) // casi negro
-    val headerSub = Color(0xFF263244)   // gris oscuro
-    val headerHairline = Color(0x330B1220)
+    val textStrong = Color(0xFFEAF1FF)
+    val textSoft = Color(0xFFB9C6DA)
+    val textMuted = Color(0xFF93A7C4)
 
     fun pctColor(pct: Double): Color = when {
         pct > 0.0001 -> success
@@ -79,289 +97,279 @@ fun App() {
         else -> "•"
     }
 
+    // Layout (menos margen real)
+    val outerPad = 6.dp
+    val innerPadH = 8.dp
+    val innerPadV = 8.dp
+    val sectionGap = 6.dp
+
     MaterialTheme {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(metalBase) // ✅ todo el fondo igual
-                .safeContentPadding()
+                .background(Brush.verticalGradient(listOf(bgTop, surface0)))
+                // ✅ Insets SOLO arriba/abajo (evita “margen lateral raro” del emulador)
+                .windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Bottom))
         ) {
-            Column(
+            val mainShape = RoundedCornerShape(18.dp)
+
+            Card(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 14.dp)
-                    .padding(top = 10.dp, bottom = 12.dp)
+                    .padding(horizontal = outerPad, vertical = outerPad),
+                shape = mainShape,
+                colors = CardDefaults.cardColors(containerColor = surface0),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
-                // =========================================================
-                // HEADER (FIJO) - contraste alto en fondo metálico
-                // =========================================================
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Bolsa Cotarelo",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = headerTitle
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = "Estado: ${if (marketState.isOpen) "ABIERTO" else "CERRADO"} · " +
-                                    "Acciones: ${marketState.stocks.size} · " +
-                                    "Tendencia: ${marketState.trend}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = headerSub
-                        )
-                    }
-
-                    // Chip estado (fondo oscuro + texto claro para contrastar)
-                    val chipBg = if (marketState.isOpen) Color(0xFF0E2F1F) else Color(0xFF3A0F14)
-                    val chipText = Color(0xFFEAF2FF)
-                    val chipStroke = if (marketState.isOpen) success.copy(alpha = 0.25f) else danger.copy(alpha = 0.25f)
-                    val chipShape = RoundedCornerShape(999.dp)
-
-                    Card(
-                        shape = chipShape,
-                        colors = CardDefaults.cardColors(containerColor = chipBg),
-                        elevation = CardDefaults.cardElevation(0.dp),
-                        modifier = Modifier.border(1.dp, chipStroke, chipShape)
-                    ) {
-                        Text(
-                            text = if (marketState.isOpen) "MARKET OPEN" else "MARKET CLOSED",
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = chipText,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                // línea muy fina para separar el header del bloque dark (queda pro)
-                Spacer(Modifier.height(10.dp))
-                Divider(color = headerHairline)
-                Spacer(Modifier.height(12.dp))
-
-                // =========================================================
-                // FEATURED (FIJO)
-                // =========================================================
-                val featuredShape = RoundedCornerShape(18.dp)
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = featuredShape,
-                    colors = CardDefaults.cardColors(containerColor = surface0),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .border(1.dp, stroke, featuredShape)
-                            .padding(14.dp)
-                    ) {
-                        // banda superior “brand”
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(
-                                    Brush.horizontalGradient(listOf(brand, brand2))
-                                )
-                        )
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = featured?.name ?: "—",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = cardTextStrong
-                                )
-                                Text(
-                                    text = "Ticker: ${featured?.ticker ?: "--"} · ${featured?.sector ?: ""}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = cardTextSoft
-                                )
-                            }
-
-                            val pct = featured?.changePercent ?: 0.0
-                            val c = pctColor(pct)
-                            val badgeShape = RoundedCornerShape(999.dp)
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(badgeShape)
-                                    .background(c.copy(alpha = 0.16f))
-                                    .border(1.dp, c.copy(alpha = 0.25f), badgeShape)
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "${arrow(pct)} ${featured?.changePercent?.let { String.format("%.2f%%", it) } ?: "--"}",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = c,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(10.dp))
-
-                        Text(
-                            text = featured?.currentPrice?.let { String.format("%.2f €", it) } ?: "--",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = cardTextStrong
-                        )
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            MetricBox(
-                                title = "Apertura",
-                                value = featured?.openPrice?.let { String.format("%.2f", it) } ?: "--",
-                                modifier = Modifier.weight(1f),
-                                surface = surface1,
-                                stroke = stroke,
-                                titleColor = cardTextMuted,
-                                valueColor = cardTextStrong
-                            )
-                            MetricBox(
-                                title = "Máx",
-                                value = featured?.highPrice?.let { String.format("%.2f", it) } ?: "--",
-                                modifier = Modifier.weight(1f),
-                                surface = surface1,
-                                stroke = stroke,
-                                titleColor = cardTextMuted,
-                                valueColor = cardTextStrong
-                            )
-                            MetricBox(
-                                title = "Mín",
-                                value = featured?.lowPrice?.let { String.format("%.2f", it) } ?: "--",
-                                modifier = Modifier.weight(1f),
-                                surface = surface1,
-                                stroke = stroke,
-                                titleColor = cardTextMuted,
-                                valueColor = cardTextStrong
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                // =========================================================
-                // NEWS (FIJO)
-                // =========================================================
-                val lastNews = marketState.news.takeLast(3).reversed()
-                NewsPanel(
-                    news = lastNews,
-                    surface = surface0,
-                    stroke = stroke,
-                    textStrong = cardTextStrong,
-                    textSoft = cardTextSoft,
-                    neutral = neutral,
-                    success = success,
-                    danger = danger
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                // =========================================================
-                // MARKET (BLOQUE ÚNICO: header + lista) ✅
-                // =========================================================
-                val marketShape = RoundedCornerShape(18.dp)
-                Card(
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    shape = marketShape,
-                    colors = CardDefaults.cardColors(containerColor = surface0),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        .fillMaxSize()
+                        .border(1.dp, stroke, mainShape)
+                        .padding(horizontal = innerPadH, vertical = innerPadV)
                 ) {
-                    Column(
+                    // =========================================================
+                    // HEADER compacto
+                    // =========================================================
+                    HeaderCompact(
+                        isOpen = marketState.isOpen,
+                        simSpeed = marketState.simSpeed,
+                        trend = marketState.trend,
+                        stocksCount = marketState.stocks.size,
+                        success = success,
+                        danger = danger,
+                        textStrong = textStrong,
+                        textSoft = textSoft,
+                        stroke = strokeSoft
+                    )
+
+                    Spacer(Modifier.height(sectionGap))
+                    Divider(color = strokeSoft)
+                    Spacer(Modifier.height(sectionGap))
+
+                    // =========================================================
+                    // TOP BAR compacto (sin perder info)
+                    // =========================================================
+                    CompactTopBar(
+                        cash = portfolioState.cash,
+                        value = portfolioState.portfolioValue,
+                        pnlEuro = portfolioState.pnlEuro,
+                        pnlPercent = portfolioState.pnlPercent,
+                        isOpen = marketState.isOpen,
+                        isPaused = marketState.isPaused,
+                        simSpeed = marketState.simSpeed,
+                        surface = surface1,
+                        inner = surface2,
+                        stroke = strokeSoft,
+                        textStrong = textStrong,
+                        textSoft = textSoft,
+                        textMuted = textMuted,
+                        success = success,
+                        danger = danger,
+                        neutral = neutral,
+                        onToggleOpen = { engine.setMarketOpen(!marketState.isOpen) },
+                        onTogglePause = { engine.setPaused(!marketState.isPaused) },
+                        onSetSpeed = { engine.setSimSpeed(it) }
+                    )
+
+                    Spacer(Modifier.height(sectionGap))
+
+                    // =========================================================
+                    // Featured + News (colapsados por defecto => más mercado)
+                    // =========================================================
+                    var showFeatured by remember { mutableStateOf(false) }
+                    var showNewsExpanded by remember { mutableStateOf(false) }
+
+                    FeaturedMini(
+                        featured = featured,
+                        show = showFeatured,
+                        onToggle = { showFeatured = !showFeatured },
+                        brand = brand,
+                        brand2 = brand2,
+                        surface = surface1,
+                        inner = surface2,
+                        stroke = strokeSoft,
+                        textStrong = textStrong,
+                        textSoft = textSoft,
+                        textMuted = textMuted,
+                        pctColor = { pctColor(it) },
+                        arrow = { arrow(it) }
+                    )
+
+                    Spacer(Modifier.height(sectionGap))
+
+                    NewsTicker(
+                        news = marketState.news,
+                        expanded = showNewsExpanded,
+                        onToggle = { showNewsExpanded = !showNewsExpanded },
+                        surface = surface1,
+                        inner = surface2,
+                        stroke = strokeSoft,
+                        textStrong = textStrong,
+                        textSoft = textSoft,
+                        neutral = neutral,
+                        success = success,
+                        danger = danger
+                    )
+
+                    Spacer(Modifier.height(sectionGap))
+                    Divider(color = strokeSoft)
+                    Spacer(Modifier.height(sectionGap))
+
+                    // =========================================================
+                    // MARKET HEADER + LIST (reparto por weights, sin cortes)
+                    // =========================================================
+                    MarketHeader(
+                        textStrong = textStrong,
+                        textSoft = textSoft,
+                        stroke = strokeSoft
+                    )
+
+                    LazyColumn(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .border(1.dp, stroke, marketShape)
-                            .padding(12.dp)
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentPadding = PaddingValues(bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Mercado",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = cardTextStrong,
-                                modifier = Modifier.weight(1f)
+                        items(
+                            items = marketState.stocks,
+                            key = { it.ticker }
+                        ) { stock ->
+                            MarketRow(
+                                ticker = stock.ticker,
+                                name = stock.name,
+                                price = stock.currentPrice,
+                                changeEuro = stock.changeEuro,
+                                changePercent = stock.changePercent,
+                                surface = surface2,
+                                stroke = strokeSoft,
+                                textStrong = textStrong,
+                                textSoft = textSoft,
+                                neutral = neutral,
+                                success = success,
+                                danger = danger,
+                                onSelect = { selectedTicker = stock.ticker },
+                                onBuy = { portfolioVm.openTrade(stock.ticker, PortfolioViewModel.Mode.BUY) },
+                                onSell = { portfolioVm.openTrade(stock.ticker, PortfolioViewModel.Mode.SELL) }
                             )
-                            Text(
-                                text = "Precio",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = cardTextSoft,
-                                modifier = Modifier.width(90.dp)
-                            )
-                            Text(
-                                text = "Var.",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = cardTextSoft,
-                                modifier = Modifier.width(86.dp)
-                            )
-                        }
-
-                        Spacer(Modifier.height(10.dp))
-                        Divider(color = stroke)
-                        Spacer(Modifier.height(10.dp))
-
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(bottom = 6.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            items(
-                                items = marketState.stocks,
-                                key = { it.ticker }
-                            ) { stock ->
-                                MarketRow(
-                                    ticker = stock.ticker,
-                                    name = stock.name,
-                                    price = stock.currentPrice,
-                                    changePercent = stock.changePercent,
-                                    surface = surface1,
-                                    stroke = stroke,
-                                    textStrong = cardTextStrong,
-                                    textSoft = cardTextSoft,
-                                    neutral = neutral,
-                                    success = success,
-                                    danger = danger
-                                )
-                            }
                         }
                     }
                 }
             }
+
+            TradeDialog(
+                vm = portfolioVm,
+                dialogSurface = surface0,
+                innerSurface = surface1,
+                stroke = stroke,
+                textStrong = textStrong,
+                textSoft = textSoft,
+                textMuted = textMuted,
+                success = success,
+                danger = danger,
+                neutral = neutral
+            )
         }
     }
 }
 
+// =========================================================
+// HEADER compacto
+// =========================================================
 @Composable
-private fun NewsPanel(
-    news: List<NewsEvent>,
+private fun HeaderCompact(
+    isOpen: Boolean,
+    simSpeed: Double,
+    trend: Any,
+    stocksCount: Int,
+    success: Color,
+    danger: Color,
+    textStrong: Color,
+    textSoft: Color,
+    stroke: Color
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Bolsa Cotarelo",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = textStrong,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "${if (isOpen) "ABIERTO" else "CERRADO"} · x${String.format("%.2f", simSpeed)} · $trend · $stocksCount acciones",
+                style = MaterialTheme.typography.bodySmall,
+                color = textSoft,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        val chipBg = if (isOpen) Color(0xFF0E2F1F) else Color(0xFF3A0F14)
+        val chipStroke = if (isOpen) success.copy(alpha = 0.45f) else danger.copy(alpha = 0.45f)
+        val chipShape = RoundedCornerShape(999.dp)
+
+        Card(
+            shape = chipShape,
+            colors = CardDefaults.cardColors(containerColor = chipBg),
+            elevation = CardDefaults.cardElevation(0.dp),
+            modifier = Modifier.border(1.dp, chipStroke, chipShape)
+        ) {
+            Text(
+                text = if (isOpen) "OPEN" else "CLOSED",
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = Color(0xFFEAF2FF),
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+// =========================================================
+// TOP BAR compacto (Portfolio + Controles)
+// =========================================================
+@Composable
+private fun CompactTopBar(
+    cash: Double,
+    value: Double,
+    pnlEuro: Double,
+    pnlPercent: Double,
+    isOpen: Boolean,
+    isPaused: Boolean,
+    simSpeed: Double,
     surface: Color,
+    inner: Color,
     stroke: Color,
     textStrong: Color,
     textSoft: Color,
-    neutral: Color,
+    textMuted: Color,
     success: Color,
-    danger: Color
+    danger: Color,
+    neutral: Color,
+    onToggleOpen: () -> Unit,
+    onTogglePause: () -> Unit,
+    onSetSpeed: (Double) -> Unit
 ) {
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(16.dp)
+
+    val pnlColor = when {
+        pnlEuro > 0.0001 -> success
+        pnlEuro < -0.0001 -> danger
+        else -> neutral
+    }
+    val signEuro = if (pnlEuro >= 0) "+" else ""
+    val signPct = if (pnlPercent >= 0) "+" else ""
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = shape,
@@ -371,44 +379,434 @@ private fun NewsPanel(
         Column(
             modifier = Modifier
                 .border(1.dp, stroke, shape)
-                .padding(12.dp)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MiniPill("Saldo", String.format("%.2f €", cash), Modifier.weight(1f), inner, stroke, textMuted, textStrong)
+                MiniPill("Valor", String.format("%.2f €", value), Modifier.weight(1f), inner, stroke, textMuted, textStrong)
+                MiniPill(
+                    "PnL",
+                    "$signEuro${String.format("%.2f", pnlEuro)}€",
+                    Modifier.weight(1f),
+                    inner,
+                    stroke,
+                    textMuted,
+                    pnlColor,
+                    sub = "$signPct${String.format("%.2f", pnlPercent)}%"
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ControlChip(
+                    text = if (isOpen) "CERRAR" else "ABRIR",
+                    bg = (if (isOpen) danger else success).copy(alpha = 0.18f),
+                    stroke = (if (isOpen) danger else success).copy(alpha = 0.40f),
+                    fg = if (isOpen) danger else success,
+                    modifier = Modifier.weight(1f),
+                    onClick = onToggleOpen
+                )
+                ControlChip(
+                    text = if (isPaused) "REANUDAR" else "PAUSAR",
+                    bg = neutral.copy(alpha = 0.16f),
+                    stroke = neutral.copy(alpha = 0.35f),
+                    fg = Color(0xFFE3ECFF),
+                    modifier = Modifier.weight(1f),
+                    onClick = onTogglePause
+                )
+            }
+
+            SpeedMiniRow(
+                current = simSpeed,
+                textSoft = textSoft,
+                textStrong = textStrong,
+                textMuted = textMuted,
+                stroke = stroke,
+                inner = inner,
+                onSetSpeed = onSetSpeed
+            )
+        }
+    }
+}
+
+@Composable
+private fun MiniPill(
+    title: String,
+    value: String,
+    modifier: Modifier,
+    surface: Color,
+    stroke: Color,
+    titleColor: Color,
+    valueColor: Color,
+    sub: String? = null
+) {
+    val shape = RoundedCornerShape(12.dp)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(surface)
+            .border(1.dp, stroke, shape)
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+    ) {
+        Column {
+            Text(text = title, style = MaterialTheme.typography.labelSmall, color = titleColor, maxLines = 1)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = valueColor,
+                maxLines = 1
+            )
+            if (sub != null) {
+                Spacer(Modifier.height(1.dp))
+                Text(text = sub, style = MaterialTheme.typography.labelSmall, color = valueColor, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ControlChip(
+    text: String,
+    bg: Color,
+    stroke: Color,
+    fg: Color,
+    modifier: Modifier,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(999.dp)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(bg)
+            .border(1.dp, stroke, shape)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = fg,
+            maxLines = 1,
+            overflow = TextOverflow.Clip
+        )
+    }
+}
+
+@Composable
+private fun SpeedMiniRow(
+    current: Double,
+    textSoft: Color,
+    textStrong: Color,
+    textMuted: Color,
+    stroke: Color,
+    inner: Color,
+    onSetSpeed: (Double) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "Velocidad: x${String.format("%.2f", current)}",
+            style = MaterialTheme.typography.labelMedium,
+            color = textSoft,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
+        SpeedDot("0.5", 0.5, current, textStrong, textMuted, stroke, inner, onSetSpeed)
+        SpeedDot("1", 1.0, current, textStrong, textMuted, stroke, inner, onSetSpeed)
+        SpeedDot("2", 2.0, current, textStrong, textMuted, stroke, inner, onSetSpeed)
+        SpeedDot("5", 5.0, current, textStrong, textMuted, stroke, inner, onSetSpeed)
+    }
+}
+
+@Composable
+private fun SpeedDot(
+    label: String,
+    speed: Double,
+    current: Double,
+    strong: Color,
+    muted: Color,
+    stroke: Color,
+    inner: Color,
+    onSetSpeed: (Double) -> Unit
+) {
+    val selected = abs(current - speed) < 1e-6
+    val shape = RoundedCornerShape(999.dp)
+    val bg = if (selected) strong.copy(alpha = 0.18f) else inner
+    val br = if (selected) strong.copy(alpha = 0.45f) else stroke
+    val fg = if (selected) strong else muted
+
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .background(bg)
+            .border(1.dp, br, shape)
+            .clickable { onSetSpeed(speed) }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = fg,
+            maxLines = 1
+        )
+    }
+}
+
+// =========================================================
+// Featured (colapsable, compacto)
+// =========================================================
+@Composable
+private fun FeaturedMini(
+    featured: StockSnapshot?,
+    show: Boolean,
+    onToggle: () -> Unit,
+    brand: Color,
+    brand2: Color,
+    surface: Color,
+    inner: Color,
+    stroke: Color,
+    textStrong: Color,
+    textSoft: Color,
+    textMuted: Color,
+    pctColor: (Double) -> Color,
+    arrow: (Double) -> String
+) {
+    val shape = RoundedCornerShape(16.dp)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onToggle() },
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, stroke, shape)
+                .padding(horizontal = 10.dp, vertical = 10.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .width(6.dp)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Brush.verticalGradient(listOf(brand, brand2)))
+                )
+                Spacer(Modifier.width(10.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = featured?.name ?: "—",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = textStrong,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "Ticker: ${featured?.ticker ?: "--"} · ${featured?.sector ?: ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSoft,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                val pct = featured?.changePercent ?: 0.0
+                val c = pctColor(pct)
+                val badgeShape = RoundedCornerShape(999.dp)
+
+                Box(
+                    modifier = Modifier
+                        .clip(badgeShape)
+                        .background(c.copy(alpha = 0.18f))
+                        .border(1.dp, c.copy(alpha = 0.35f), badgeShape)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "${arrow(pct)} ${String.format("%.2f%%", pct)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = c,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            if (show) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = featured?.currentPrice?.let { String.format("%.2f €", it) } ?: "--",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = textStrong,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "Tap para ocultar",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textMuted
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(inner)
+                        .border(1.dp, stroke, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    val line = buildString {
+                        append("Apertura: ")
+                        append(featured?.openPrice?.let { String.format("%.2f", it) } ?: "--")
+                        append("  ·  Máx: ")
+                        append(featured?.highPrice?.let { String.format("%.2f", it) } ?: "--")
+                        append("  ·  Mín: ")
+                        append(featured?.lowPrice?.let { String.format("%.2f", it) } ?: "--")
+                    }
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSoft,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            } else {
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "Noticias",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    text = "Tap para ver detalle",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = textMuted
+                )
+            }
+        }
+    }
+}
+
+// =========================================================
+// News (ticker + expand/collapse)
+// =========================================================
+@Composable
+private fun NewsTicker(
+    news: List<NewsEvent>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    surface: Color,
+    inner: Color,
+    stroke: Color,
+    textStrong: Color,
+    textSoft: Color,
+    neutral: Color,
+    success: Color,
+    danger: Color
+) {
+    val shape = RoundedCornerShape(16.dp)
+    val last = news.lastOrNull()
+
+    val impactColor = when {
+        last == null -> neutral
+        last.impactPercent > 0.05 -> success
+        last.impactPercent < -0.05 -> danger
+        else -> neutral
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onToggle() },
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, stroke, shape)
+                .padding(horizontal = 10.dp, vertical = 10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .width(6.dp)
+                        .height(28.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(impactColor.copy(alpha = 0.95f))
+                )
+                Spacer(Modifier.width(10.dp))
+
+                Text(
+                    text = if (last == null) "Sin noticias todavía…" else last.title,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = textStrong,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
+
+                val label = if (expanded) "Ocultar" else "Ver"
                 Text(
-                    text = "${news.size}/3",
+                    text = "$label · ${news.size}",
                     style = MaterialTheme.typography.labelSmall,
                     color = textSoft
                 )
             }
 
-            Spacer(Modifier.height(10.dp))
-            Divider(color = stroke)
-            Spacer(Modifier.height(10.dp))
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                Divider(color = stroke)
+                Spacer(Modifier.height(8.dp))
 
-            if (news.isEmpty()) {
-                Text(
-                    text = "Sin noticias todavía...",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = textSoft
-                )
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    news.forEach { item ->
-                        NewsRow(
-                            item = item,
-                            textStrong = textStrong,
-                            textSoft = textSoft,
-                            neutral = neutral,
-                            success = success,
-                            danger = danger
-                        )
+                val last3 = news.takeLast(3).reversed()
+                if (last3.isEmpty()) {
+                    Text(
+                        text = "Sin noticias todavía…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textSoft
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        last3.forEach { item ->
+                            NewsRowCompact(
+                                item = item,
+                                surface = inner,
+                                stroke = stroke,
+                                textStrong = textStrong,
+                                textSoft = textSoft,
+                                neutral = neutral,
+                                success = success,
+                                danger = danger
+                            )
+                        }
                     }
                 }
             }
@@ -417,8 +815,10 @@ private fun NewsPanel(
 }
 
 @Composable
-private fun NewsRow(
+private fun NewsRowCompact(
     item: NewsEvent,
+    surface: Color,
+    stroke: Color,
     textStrong: Color,
     textSoft: Color,
     neutral: Color,
@@ -432,96 +832,139 @@ private fun NewsRow(
     }
     val sign = if (item.impactPercent >= 0) "+" else ""
     val pct = String.format("%.1f", item.impactPercent)
+    val rowShape = RoundedCornerShape(12.dp)
 
-    val badgeShape = RoundedCornerShape(999.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(rowShape)
+            .background(surface)
+            .border(1.dp, stroke, rowShape)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .width(6.dp)
+                    .height(22.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(impactColor.copy(alpha = 0.95f))
+            )
+            Spacer(Modifier.width(10.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = textStrong,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Sector: ${item.sector}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = textSoft,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            val badgeShape = RoundedCornerShape(999.dp)
+            Box(
+                modifier = Modifier
+                    .clip(badgeShape)
+                    .background(impactColor.copy(alpha = 0.18f))
+                    .border(1.dp, impactColor.copy(alpha = 0.35f), badgeShape)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "$sign$pct%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = impactColor,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+// =========================================================
+// Market header (weights, sin “Mercado” en vertical)
+// =========================================================
+@Composable
+private fun MarketHeader(
+    textStrong: Color,
+    textSoft: Color,
+    stroke: Color
+) {
+    val wMarket = 1.35f
+    val wPrice = 0.70f
+    val wVar = 1.05f
+    val wTrade = 0.85f
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .width(6.dp)
-                .height(34.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(impactColor.copy(alpha = 0.9f))
+        Text(
+            text = "Mercado",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = textStrong,
+            modifier = Modifier.weight(wMarket),
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
         )
-        Spacer(Modifier.width(10.dp))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = textStrong
-            )
-            Text(
-                text = "Sector: ${item.sector}",
-                style = MaterialTheme.typography.bodySmall,
-                color = textSoft
-            )
-        }
-
-        Box(
+        Text(
+            text = "Precio",
+            style = MaterialTheme.typography.labelMedium,
+            color = textSoft,
+            textAlign = TextAlign.End,
             modifier = Modifier
-                .clip(badgeShape)
-                .background(impactColor.copy(alpha = 0.16f))
-                .border(1.dp, impactColor.copy(alpha = 0.25f), badgeShape)
-                .padding(horizontal = 10.dp, vertical = 6.dp)
-        ) {
-            Text(
-                text = "$sign$pct%",
-                style = MaterialTheme.typography.labelMedium,
-                color = impactColor,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
+                .weight(wPrice)
+                .padding(end = 6.dp),
+            maxLines = 1,
+            softWrap = false
+        )
+        Text(
+            text = "Var.",
+            style = MaterialTheme.typography.labelMedium,
+            color = textSoft,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.weight(wVar),
+            maxLines = 1,
+            softWrap = false
+        )
+        Text(
+            text = "Trade",
+            style = MaterialTheme.typography.labelMedium,
+            color = textSoft,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(wTrade),
+            maxLines = 1,
+            softWrap = false
+        )
     }
+
+    Spacer(Modifier.height(6.dp))
+    Divider(color = stroke)
+    Spacer(Modifier.height(8.dp))
 }
 
-@Composable
-private fun MetricBox(
-    title: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    surface: Color,
-    stroke: Color,
-    titleColor: Color,
-    valueColor: Color
-) {
-    val shape = RoundedCornerShape(14.dp)
-    Card(
-        modifier = modifier,
-        shape = shape,
-        colors = CardDefaults.cardColors(containerColor = surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .border(1.dp, stroke, shape)
-                .padding(10.dp)
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelSmall,
-                color = titleColor
-            )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = valueColor
-            )
-        }
-    }
-}
-
+// =========================================================
+// Market Row (weights + mínimos => no corta lo importante)
+// =========================================================
 @Composable
 private fun MarketRow(
     ticker: String,
     name: String,
     price: Double,
+    changeEuro: Double,
     changePercent: Double,
     surface: Color,
     stroke: Color,
@@ -529,7 +972,10 @@ private fun MarketRow(
     textSoft: Color,
     neutral: Color,
     success: Color,
-    danger: Color
+    danger: Color,
+    onSelect: () -> Unit,
+    onBuy: () -> Unit,
+    onSell: () -> Unit
 ) {
     val baseColor = when {
         changePercent > 0.0001 -> success
@@ -544,41 +990,65 @@ private fun MarketRow(
         else -> "•"
     }
 
+    val signEuro = if (changeEuro >= 0) "+" else ""
+    val signPct = if (changePercent >= 0) "+" else ""
+
+    val wMarket = 1.35f
+    val wPrice = 0.70f
+    val wVar = 1.05f
+    val wTrade = 0.85f
+
+    val minPrice = 78.dp
+    val minVar = 108.dp
+    val minTrade = 86.dp
+
     val shape = RoundedCornerShape(16.dp)
     val badgeShape = RoundedCornerShape(999.dp)
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelect() },
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier
                 .border(1.dp, stroke, shape)
-                .padding(horizontal = 12.dp, vertical = 11.dp),
+                .padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .width(6.dp)
-                    .height(36.dp)
+                    .width(5.dp)
+                    .height(44.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(accent.copy(alpha = 0.9f))
+                    .background(accent.copy(alpha = 0.95f))
             )
             Spacer(Modifier.width(10.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier
+                    .weight(wMarket)
+                    .padding(end = 8.dp)
+            ) {
                 Text(
                     text = ticker,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = textStrong
+                    color = textStrong,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = name,
                     style = MaterialTheme.typography.bodySmall,
-                    color = textSoft
+                    color = textSoft,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -587,25 +1057,101 @@ private fun MarketRow(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = textStrong,
-                modifier = Modifier.width(90.dp)
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier
+                    .weight(wPrice)
+                    .widthIn(min = minPrice)
+                    .padding(end = 6.dp)
             )
 
             Box(
                 modifier = Modifier
-                    .width(86.dp)
+                    .weight(wVar)
+                    .widthIn(min = minVar)
                     .clip(badgeShape)
-                    .background(accent.copy(alpha = 0.16f))
-                    .border(1.dp, accent.copy(alpha = 0.25f), badgeShape)
-                    .padding(vertical = 7.dp),
+                    .background(accent.copy(alpha = 0.18f))
+                    .border(1.dp, accent.copy(alpha = 0.42f), badgeShape)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "$arrow ${String.format("%.2f%%", changePercent)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = accent,
-                    fontWeight = FontWeight.SemiBold
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$arrow $signEuro${String.format("%.2f", changeEuro)}€",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    Text(
+                        text = "$signPct${String.format("%.2f", changePercent)}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            Column(
+                modifier = Modifier
+                    .weight(wTrade)
+                    .widthIn(min = minTrade),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                TradeChip(
+                    text = "BUY",
+                    bg = success.copy(alpha = 0.18f),
+                    stroke = success.copy(alpha = 0.42f),
+                    fg = success,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onBuy
+                )
+                TradeChip(
+                    text = "SELL",
+                    bg = danger.copy(alpha = 0.18f),
+                    stroke = danger.copy(alpha = 0.42f),
+                    fg = danger,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onSell
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun TradeChip(
+    text: String,
+    bg: Color,
+    stroke: Color,
+    fg: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(999.dp)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(bg)
+            .border(1.dp, stroke, shape)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = fg,
+            maxLines = 1,
+            overflow = TextOverflow.Clip
+        )
     }
 }

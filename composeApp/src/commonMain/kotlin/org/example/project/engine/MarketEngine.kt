@@ -1,30 +1,55 @@
 package org.example.project.engine
 
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
-import org.example.project.data.repository.InMemoryMarketRepository
+import org.example.project.data.repository.MarketRepository
 import org.example.project.presentation.state.MarketState
 
+/**
+ * Motor de simulación:
+ * - 1 coroutine por ticker (actualiza precio cada 1-3s, escalado por simSpeed).
+ * - 2 coroutines globales: tendencia + noticias.
+ * - Permite pausar/reanudar, abrir/cerrar mercado y cambiar velocidad.
+ * - Cancelación limpia al cerrar la app.
+ *
+ * Nota importante (proyecto final):
+ * - Aunque se pase externalScope (que suele ser Main), el motor corre en Dispatchers.Default.
+ * - Si externalScope se cancela, el motor se cancela (job hijo).
+ * - close() cancela SOLO el motor (no el scope externo).
+ */
 class MarketEngine(
-    private val marketRepo: InMemoryMarketRepository,
-    private val externalScope: CoroutineScope? = null
+    private val marketRepo: MarketRepository,
+    externalScope: CoroutineScope? = null
 ) {
+    // Job del engine:
+    // - Si hay externalScope, hacemos nuestro job hijo del Job externo (se cancela con él).
+    // - Si no hay externalScope, es un job independiente.
+    private val engineJob: Job = SupervisorJob(externalScope?.coroutineContext?.get(Job))
 
-    private val job = SupervisorJob()
-    private val scope: CoroutineScope =
-        externalScope ?: CoroutineScope(Dispatchers.Default + job)
+    // Scope real del motor: SIEMPRE Default (evitar trabajo pesado en Main)
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + engineJob)
 
     val marketState: StateFlow<MarketState> = marketRepo.marketState
 
     // 1 job por ticker
     private val updaterJobs: MutableMap<String, Job> = mutableMapOf()
 
-    // Generador global único
-    private val globalGenerator by lazy { NewsAndTrendGenerator(marketRepo) }
-
-    // Jobs globales (tendencia + noticias)
+    // Jobs globales
     private var trendJob: Job? = null
     private var newsJob: Job? = null
+
+    // Reutilizamos updater (no crear objetos en bucle)
+    private val updater = SingleStockPriceUpdater(marketRepo)
+
+    // ÚNICO generador global (no recrearlo)
+    private val generator: NewsAndTrendGenerator by lazy {
+        NewsAndTrendGenerator(marketRepo, scope)
+    }
 
     // ============================================================
     // START / STOP
@@ -33,12 +58,10 @@ class MarketEngine(
     fun startAllTickers() {
         startGlobalGeneratorsIfNeeded()
 
-        // si está cerrado o pausado, no arrancamos tickers (ahorra recursos)
         val state = marketState.value
         if (!state.isOpen || state.isPaused) return
 
-        val tickers = state.stocks.map { it.ticker }
-        tickers.forEach { startTicker(it) }
+        state.stocks.forEach { startTicker(it.ticker) }
     }
 
     fun startTicker(ticker: String) {
@@ -47,62 +70,61 @@ class MarketEngine(
         val state = marketState.value
         if (!state.isOpen || state.isPaused) return
 
-        // evita lanzar dos veces el mismo ticker
         if (updaterJobs[ticker]?.isActive == true) return
 
-        val newJob = scope.launch {
-            SingleStockPriceUpdater(marketRepo).run(ticker)
+        updaterJobs[ticker] = scope.launch {
+            updater.run(ticker)
         }
-        updaterJobs[ticker] = newJob
     }
 
     private fun startGlobalGeneratorsIfNeeded() {
-        // Tendencia
+        if (!engineJob.isActive) return
+
         if (trendJob?.isActive != true) {
-            trendJob = scope.launch { globalGenerator.runTrend() }
+            trendJob = scope.launch { generator.runTrend() }
         }
-        // Noticias
         if (newsJob?.isActive != true) {
-            newsJob = scope.launch { globalGenerator.runNews() }
+            newsJob = scope.launch { generator.runNews() }
         }
     }
 
     fun stopTicker(ticker: String) {
-        updaterJobs[ticker]?.cancel()
-        updaterJobs.remove(ticker)
+        updaterJobs.remove(ticker)?.cancel()
+    }
+
+    fun stopAllTickers() {
+        updaterJobs.values.forEach { it.cancel() }
+        updaterJobs.clear()
     }
 
     fun stopAll() {
-        // parar tickers
-        updaterJobs.values.forEach { it.cancel() }
-        updaterJobs.clear()
+        stopAllTickers()
 
-        // parar generadores globales
         trendJob?.cancel()
         newsJob?.cancel()
         trendJob = null
         newsJob = null
     }
 
-    fun stopEngine() {
-        // Cancela TODO el scope del engine (engine muerto)
+    /**
+     * Cierre final del engine (Desktop onClose / Android onDestroy).
+     * Cancela TODO lo del motor, sin tocar scopes externos.
+     */
+    fun close() {
         stopAll()
-        job.cancel()
+        scope.cancel() // cancela engineJob + hijos
     }
 
     // ============================================================
-    // CONTROLES (enunciado: pausar/reanudar, abrir/cerrar, velocidad)
+    // CONTROLES (enunciado)
     // ============================================================
 
     fun setPaused(paused: Boolean) {
         marketRepo.setPaused(paused)
 
         if (paused) {
-            // pausado => paramos tickers para ahorrar CPU
-            updaterJobs.values.forEach { it.cancel() }
-            updaterJobs.clear()
+            stopAllTickers()
         } else {
-            // reanudar => re-lanzamos tickers
             startAllTickers()
         }
     }
@@ -111,18 +133,16 @@ class MarketEngine(
         marketRepo.setMarketOpen(open)
 
         if (!open) {
-            // cerrado => paramos tickers
-            updaterJobs.values.forEach { it.cancel() }
-            updaterJobs.clear()
+            stopAllTickers()
         } else {
-            // abierto => arrancamos tickers
             startAllTickers()
         }
     }
 
     fun setSimSpeed(speed: Double) {
         marketRepo.setSimSpeed(speed)
-        // No hace falta reiniciar jobs: delays en generadores ya usan simSpeed
-        // y el updater por ticker lo aplicaremos cuando lo ajustemos (siguiente paso).
+        // No reiniciamos jobs:
+        // - SingleStockPriceUpdater consulta state.simSpeed.
+        // - NewsAndTrendGenerator consulta simSpeed en delays.
     }
 }

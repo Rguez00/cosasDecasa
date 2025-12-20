@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import org.example.project.core.util.ThreadSafeMap
 import org.example.project.domain.model.MarketTrend
 import org.example.project.domain.model.NewsEvent
@@ -23,9 +24,16 @@ class InMemoryMarketRepository(
     private val snapshots = ThreadSafeMap<String, StockSnapshot>()
     private val sectorBiasPercent = ThreadSafeMap<String, Double>() // key = Sector.name
 
+    // Orden estable para UI (evita sort en cada publish)
+    private val orderedTickers: List<String> =
+        initialStocks.map { it.ticker }.distinct().sorted()
+
     // Bias global por tick (% aprox). Ej: +0.10 => +0.10% por tick
     @Volatile
     private var trendBiasPercent: Double = 0.0
+
+    // Evita que múltiples tickers reconstruyan/publquen la lista a la vez
+    private val publishLock = Any()
 
     // =========================
     // Flow + StateFlow (requisitos)
@@ -59,7 +67,7 @@ class InMemoryMarketRepository(
                 name = stock.name,
                 ticker = stock.ticker,
                 sector = stock.sector,
-                volatility = stock.volatility, // ✅ corregido (una sola coma)
+                volatility = stock.volatility,
 
                 currentPrice = price,
                 openPrice = price,
@@ -91,34 +99,42 @@ class InMemoryMarketRepository(
         snapshots.get(ticker)
 
     override fun updateSnapshot(ticker: String, newSnapshot: StockSnapshot) {
+        // Guardamos snapshot
         snapshots.put(ticker, newSnapshot)
 
         // Flow de cambios de precios (requisito)
         _priceUpdates.tryEmit(newSnapshot)
 
+        // Publicación consolidada para UI (lista estable)
         publish()
     }
 
     override fun setMarketOpen(isOpen: Boolean) {
-        _marketState.value = _marketState.value.copy(isOpen = isOpen)
+        _marketState.update { it.copy(isOpen = isOpen) }
     }
 
     override fun setPaused(isPaused: Boolean) {
-        _marketState.value = _marketState.value.copy(isPaused = isPaused)
+        _marketState.update { it.copy(isPaused = isPaused) }
     }
 
     override fun setSimSpeed(speed: Double) {
         val safe = speed.coerceIn(0.25, 10.0)
-        _marketState.value = _marketState.value.copy(simSpeed = safe)
+        _marketState.update { it.copy(simSpeed = safe) }
     }
 
+    // =========================
+    // Trend global
+    // =========================
     override fun getTrendBiasPercent(): Double = trendBiasPercent
 
     override fun setTrend(trend: MarketTrend, biasPercent: Double) {
         trendBiasPercent = biasPercent
-        _marketState.value = _marketState.value.copy(trend = trend)
+        _marketState.update { it.copy(trend = trend) }
     }
 
+    // =========================
+    // Bias por sector
+    // =========================
     override fun getSectorBiasPercent(sector: Sector): Double =
         sectorBiasPercent.get(sector.name) ?: 0.0
 
@@ -126,23 +142,44 @@ class InMemoryMarketRepository(
         sectorBiasPercent.put(sector.name, biasPercent)
     }
 
+    // =========================
+    // Noticias
+    // =========================
     override fun pushNews(event: NewsEvent) {
-        val updated = (_marketState.value.news + event).takeLast(20)
-        _marketState.value = _marketState.value.copy(news = updated)
-    }
-
-    override fun publish() {
-        // Publicamos stocks ordenadas por ticker para UI estable
-        _marketState.value = _marketState.value.copy(
-            stocks = snapshots.values().sortedBy { it.ticker }
-        )
+        _marketState.update { current ->
+            val updated = (current.news + event).takeLast(20)
+            current.copy(news = updated)
+        }
     }
 
     // =========================
-    // Helper opcional
+    // Publish consolidado
+    // =========================
+    override fun publish() {
+        // Evitamos “pisarnos” si varios tickers publican a la vez
+        val list = synchronized(publishLock) { buildStocksList() }
+        _marketState.update { it.copy(stocks = list) }
+    }
+
+    private fun buildStocksList(): List<StockSnapshot> {
+        // Orden estable sin hacer sort cada tick
+        val result = ArrayList<StockSnapshot>(orderedTickers.size)
+        for (t in orderedTickers) {
+            val snap = snapshots.get(t)
+            if (snap != null) result.add(snap)
+        }
+        return result
+    }
+
+    // =========================
+    // Helper opcional (seguro)
     // =========================
     suspend fun expireSectorBiasLater(sector: Sector, delayMs: Long) {
+        // Capturamos el bias actual para no borrar uno “nuevo” posterior
+        val expected = getSectorBiasPercent(sector)
         delay(delayMs)
-        setSectorBias(sector, 0.0)
+        if (getSectorBiasPercent(sector) == expected) {
+            setSectorBias(sector, 0.0)
+        }
     }
 }

@@ -9,31 +9,38 @@ import org.example.project.presentation.state.PortfolioState
  * Repositorio del portfolio del usuario.
  *
  * Requisitos del enunciado cubiertos aquí:
- * - Cash inicial 10.000€ (en PortfolioState / implementación).
- * - Validaciones: no comprar sin dinero / no vender más de lo poseído.
- * - Comisión: 0.5% por operación.
- * - Confirmación previa: previewBuy/previewSell.
- * - Historial de transacciones: getTransactions + export CSV.
- * - Snapshot enriquecido para UI: getSnapshot (incluye positions, PnL, etc.).
+ * - Cash inicial 10.000€ (PortfolioState / implementación).
+ * - Validaciones:
+ *   - No comprar sin dinero suficiente
+ *   - No vender más de lo que se posee
+ *   - quantity > 0
+ * - Comisión 0.5% por operación.
+ * - Confirmación previa: previewBuy / previewSell.
+ * - Historial: getTransactions + export CSV.
+ * - Snapshot enriquecido para UI: getSnapshot (positions, PnL, totals…).
  *
- * Nota:
- * - La implementación DEBE ser thread-safe (locks o mutex).
- * - El precio por acción debe obtenerse del MarketRepository / MarketState.
+ * Importante:
+ * - Implementación thread-safe (Mutex/lock).
+ * - Precio actual obtenido del MarketRepository / MarketState.
  */
 interface PortfolioRepository {
 
-    /** Estado “live” para UI. La implementación recalcula valores al actualizar mercado o portfolio. */
+    /** Estado “live” para UI (cash, holdings, transacciones, PnL...). */
     val portfolioState: StateFlow<PortfolioState>
+
+    // ============================================================
+    // PREVIEWS (confirmación previa)
+    // ============================================================
 
     /**
      * Previsualiza una compra SIN ejecutarla.
      *
      * Reglas:
-     * - quantity debe ser > 0, si no -> Result.failure(...)
-     * - pricePerShare es el precio actual de mercado
+     * - quantity > 0
+     * - pricePerShare = precio actual de mercado
      * - grossTotal = pricePerShare * quantity
      * - commission = grossTotal * 0.005
-     * - netTotal (BUY) = grossTotal + commission
+     * - netTotal(BUY) = grossTotal + commission
      */
     suspend fun previewBuy(ticker: String, quantity: Int): Result<TransactionPreview>
 
@@ -41,13 +48,17 @@ interface PortfolioRepository {
      * Previsualiza una venta SIN ejecutarla.
      *
      * Reglas:
-     * - quantity debe ser > 0, si no -> Result.failure(...)
-     * - Validar que el usuario posee >= quantity (si no, failure)
+     * - quantity > 0
+     * - Validar que el usuario posee >= quantity
      * - grossTotal = pricePerShare * quantity
      * - commission = grossTotal * 0.005
-     * - netTotal (SELL) = grossTotal - commission
+     * - netTotal(SELL) = grossTotal - commission
      */
     suspend fun previewSell(ticker: String, quantity: Int): Result<TransactionPreview>
+
+    // ============================================================
+    // EJECUCIÓN (operación confirmada)
+    // ============================================================
 
     /**
      * Ejecuta una compra (ya confirmada por el usuario).
@@ -69,13 +80,15 @@ interface PortfolioRepository {
      */
     suspend fun sell(ticker: String, quantity: Int): Result<Transaction>
 
+    // ============================================================
+    // HISTORIAL / EXPORT / SNAPSHOT
+    // ============================================================
+
     /** Historial completo en memoria (orden cronológico). */
     suspend fun getTransactions(): List<Transaction>
 
     /**
      * Export a CSV (devuelve el contenido como String).
-     * Desktop lo guardará a fichero; Android lo compartirá/guardará.
-     *
      * Recomendación: incluir cabecera:
      * id,timestamp,type,ticker,quantity,pricePerShare,grossTotal,commission,netTotal
      */
@@ -105,3 +118,17 @@ data class TransactionPreview(
     val commission: Double,
     val netTotal: Double
 )
+
+// ============================================================
+// Errores tipados (para Result.failure)
+// ============================================================
+
+sealed class PortfolioError(message: String) : IllegalArgumentException(message) {
+    class InvalidQuantity(qty: Int) : PortfolioError("Cantidad inválida: $qty (debe ser > 0)")
+    class UnknownTicker(ticker: String) : PortfolioError("Ticker no encontrado en mercado: $ticker")
+    class InsufficientCash(required: Double, available: Double) :
+        PortfolioError("Saldo insuficiente. Necesario: %.2f €, Disponible: %.2f €".format(required, available))
+
+    class InsufficientHoldings(ticker: String, requested: Int, owned: Int) :
+        PortfolioError("No puedes vender $requested de $ticker. Posees: $owned")
+}
