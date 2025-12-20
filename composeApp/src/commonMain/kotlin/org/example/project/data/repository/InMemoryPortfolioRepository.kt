@@ -20,19 +20,6 @@ import org.example.project.presentation.state.PortfolioState
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
-/**
- * Implementación en memoria del PortfolioRepository.
- *
- * ✅ Requisitos:
- * - Cash inicial 10.000€
- * - Validaciones quantity>0, cash suficiente, holdings suficientes
- * - Comisión 0.5%
- * - Preview buy/sell
- * - Historial + export CSV
- * - Snapshot enriquecido (positions + PnL)
- * - Actualización en tiempo real (recalcula al recibir priceUpdates del mercado)
- * - Thread-safe con Mutex
- */
 class InMemoryPortfolioRepository(
     private val marketRepo: MarketRepository,
     initialCash: Double = 10_000.0,
@@ -44,20 +31,15 @@ class InMemoryPortfolioRepository(
         private const val EPS = 1e-9
     }
 
-    // Scope interno SOLO si no nos pasan uno
     private val job: Job? = if (externalScope == null) SupervisorJob() else null
     private val scope: CoroutineScope =
         externalScope ?: CoroutineScope(Dispatchers.Default + job!!)
 
-    // Lock de consistencia (cash + holdings + transactions + state)
     private val mutex = Mutex()
 
-    // Estado interno “fuente de verdad”
     private var cash: Double = initialCash
     private val holdingsMap: MutableMap<String, Holding> = linkedMapOf()
     private val transactions: MutableList<Transaction> = mutableListOf()
-
-    // Id incremental (thread-safe porque incrementa dentro de mutex)
     private var nextTxId: Int = 1
 
     private val _portfolioState = MutableStateFlow(
@@ -76,7 +58,6 @@ class InMemoryPortfolioRepository(
     private var pricesJob: Job? = null
 
     init {
-        // Recalcular “live” cuando cambian precios (solo si tenemos holdings del ticker)
         pricesJob = scope.launch {
             marketRepo.priceUpdates.collect { update ->
                 val t = normalizeTicker(update.ticker)
@@ -88,11 +69,15 @@ class InMemoryPortfolioRepository(
         }
     }
 
-    // ============================================================
-    // PREVIEWS
-    // ============================================================
+    // ✅ Guardia repo-level
+    private fun isMarketTradable(): Boolean {
+        val st = marketRepo.marketState.value
+        return st.isOpen && !st.isPaused
+    }
 
     override suspend fun previewBuy(ticker: String, quantity: Int): Result<TransactionPreview> {
+        if (!isMarketTradable()) return Result.failure(MarketClosedOrPaused)
+
         val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
@@ -121,6 +106,8 @@ class InMemoryPortfolioRepository(
     }
 
     override suspend fun previewSell(ticker: String, quantity: Int): Result<TransactionPreview> {
+        if (!isMarketTradable()) return Result.failure(MarketClosedOrPaused)
+
         val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
@@ -146,16 +133,13 @@ class InMemoryPortfolioRepository(
         )
     }
 
-    // ============================================================
-    // BUY / SELL (confirmadas)
-    // ============================================================
-
     override suspend fun buy(ticker: String, quantity: Int): Result<Transaction> {
         val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
         return mutex.withLock {
-            // Precio “real” al confirmar (dentro del lock para coherencia del estado)
+            if (!isMarketTradable()) return@withLock Result.failure(MarketClosedOrPaused)
+
             val snap = marketRepo.getSnapshot(t) ?: return@withLock Result.failure(UnknownTicker(t))
             val price = snap.currentPrice
 
@@ -207,6 +191,8 @@ class InMemoryPortfolioRepository(
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
         return mutex.withLock {
+            if (!isMarketTradable()) return@withLock Result.failure(MarketClosedOrPaused)
+
             val current = holdingsMap[t]
             val owned = current?.quantity ?: 0
             if (owned < quantity) {
@@ -246,10 +232,6 @@ class InMemoryPortfolioRepository(
         }
     }
 
-    // ============================================================
-    // HISTORIAL / EXPORT / SNAPSHOT
-    // ============================================================
-
     override suspend fun getTransactions(): List<Transaction> =
         mutex.withLock { transactions.toList() }
 
@@ -275,10 +257,6 @@ class InMemoryPortfolioRepository(
     override suspend fun getSnapshot(): PortfolioSnapshot =
         mutex.withLock { buildSnapshotLocked() }
 
-    // ============================================================
-    // Internals
-    // ============================================================
-
     private fun emitPortfolioStateLocked() {
         val snap = buildSnapshotLocked()
         _portfolioState.value = PortfolioState(
@@ -296,7 +274,6 @@ class InMemoryPortfolioRepository(
         val holdingsList = holdingsMap.values.toList()
 
         val positions = holdingsList.map { h ->
-            // Si falta snapshot, usamos avgBuyPrice como fallback para evitar 0.0 “raros”
             val currentPrice = marketRepo.getSnapshot(h.ticker)?.currentPrice ?: h.avgBuyPrice
 
             val invested = h.avgBuyPrice * h.quantity
@@ -337,10 +314,6 @@ class InMemoryPortfolioRepository(
     private fun normalizeTicker(raw: String): String =
         raw.trim().uppercase()
 
-    /**
-     * Formato CSV multiplataforma (siempre con '.' y 6 decimales)
-     * sin Locale/String.format.
-     */
     private fun fmt6(value: Double): String {
         val sign = if (value < 0) "-" else ""
         val absValue = abs(value)
@@ -352,10 +325,6 @@ class InMemoryPortfolioRepository(
         return "$sign$integer.${frac.toString().padStart(6, '0')}"
     }
 
-    /**
-     * Opcional (Desktop onClose / Android onDestroy).
-     * Si el scope es externo, NO lo cancelamos.
-     */
     fun close() {
         pricesJob?.cancel()
         pricesJob = null

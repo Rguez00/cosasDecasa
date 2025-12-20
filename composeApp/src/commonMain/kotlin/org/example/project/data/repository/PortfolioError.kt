@@ -22,6 +22,10 @@ sealed class PortfolioError(message: String) : IllegalArgumentException(message)
     data class InsufficientHoldings(val ticker: String, val requested: Int, val owned: Int) :
         PortfolioError("No tienes suficientes acciones de $ticker. Quieres vender $requested y tienes $owned.")
 
+    // ✅ NUEVO (lo estabas usando y faltaba)
+    object MarketClosedOrPaused :
+        PortfolioError("Mercado no disponible (cerrado o pausado).")
+
     companion object {
         /**
          * Formateo KMP-safe (sin Locale/String.format).

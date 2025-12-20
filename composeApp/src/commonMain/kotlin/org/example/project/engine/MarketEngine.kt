@@ -111,14 +111,12 @@ class MarketEngine(
     fun close() {
         if (!engineJob.isActive) return
 
-        // Importante: hacemos la limpieza en el controlScope (serializado)
         controlScope.launch {
             stopAllTickersLocked()
             stopGlobalGeneratorsLocked()
-
-            // Cancela los scopes del engine (NO cancela el parent externo)
-            workerScope.cancel()
-            controlScope.cancel()
+        }.invokeOnCompletion {
+            // cancela todo el árbol de jobs (worker + control)
+            engineJob.cancel()
         }
     }
 

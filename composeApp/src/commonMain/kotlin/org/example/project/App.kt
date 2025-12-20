@@ -28,7 +28,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -92,6 +92,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.lazy.rememberLazyListState
 
 
 // =========================================================
@@ -317,12 +318,12 @@ fun App() {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color(0xFFD4AF37))
+                        .background(Color.Cyan)
                         .windowInsetsPadding(
                             WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Bottom)
                         )
                         .padding(pad),
-                    color = Color(0xFFD4AF37)
+                    color = Color.Cyan
                 ) {
                     val outerPad = 6.dp
                     val innerPadH = 8.dp
@@ -642,7 +643,14 @@ private fun MainCard(
                 }
 
                 AppTab.PORTFOLIO -> {
+                    // Reparte el alto disponible entre Portfolio y Transacciones
+                    val wPortfolio = if (showPortfolioExpanded) 0.62f else 0.32f
+                    val wTx = 1f - wPortfolio
+
                     PortfolioPanel(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(wPortfolio),
                         positions = portfolioState.positions,
                         show = showPortfolioExpanded,
                         onToggle = onTogglePortfolio,
@@ -663,6 +671,9 @@ private fun MainCard(
                     Spacer(Modifier.height(sectionGap))
 
                     TransactionsPanel(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(wTx),
                         txs = portfolioState.transactions,
                         surface = p.surface1,
                         inner = p.surface2,
@@ -672,16 +683,14 @@ private fun MainCard(
                         textMuted = p.textMuted,
                         neutral = p.neutral
                     )
-
-                    Spacer(Modifier.height(sectionGap))
-                    Divider(color = p.strokeSoft)
-                    Spacer(Modifier.height(sectionGap))
-
-                    Spacer(Modifier.weight(1f))
                 }
+
 
                 AppTab.CHARTS -> {
                     ChartsPanel(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
                         marketStocks = marketState.stocks,
                         positions = portfolioState.positions,
                         selectedTicker = selectedTicker.ifBlank { marketState.stocks.firstOrNull()?.ticker.orEmpty() },
@@ -700,8 +709,8 @@ private fun MainCard(
                         success = p.success,
                         danger = p.danger
                     )
-                    Spacer(Modifier.weight(1f))
                 }
+
 
                 AppTab.ALERTS -> {
                     AlertsPanel(
@@ -1204,6 +1213,7 @@ private fun SpeedDot(
 // =========================================================
 @Composable
 private fun PortfolioPanel(
+    modifier: Modifier = Modifier,   // ✅ AÑADIR
     positions: List<PositionSnapshot>,
     show: Boolean,
     onToggle: () -> Unit,
@@ -1216,7 +1226,6 @@ private fun PortfolioPanel(
     neutral: Color,
     success: Color,
     danger: Color,
-    // ✅ nuevos
     canTrade: Boolean,
     onBuy: (String) -> Unit,
     onSell: (String) -> Unit
@@ -1234,13 +1243,14 @@ private fun PortfolioPanel(
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier, // ✅ ANTES era Modifier.fillMaxWidth()
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
+                .fillMaxSize() // ✅ IMPORTANTE para que weight funcione dentro
                 .border(1.dp, stroke, shape)
                 .padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
@@ -1339,26 +1349,35 @@ private fun PortfolioPanel(
                 Divider(color = stroke)
                 Spacer(Modifier.height(10.dp))
 
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    positions
-                        .sortedByDescending { it.valueNow }
-                        .forEach { pos ->
-                            PositionRow(
-                                pos = pos,
-                                surface = inner,
-                                stroke = stroke,
-                                textStrong = textStrong,
-                                textSoft = textSoft,
-                                textMuted = textMuted,
-                                neutral = neutral,
-                                success = success,
-                                danger = danger,
-                                // ✅ trade
-                                canTrade = canTrade,
-                                onBuy = { onBuy(pos.ticker) },
-                                onSell = { onSell(pos.ticker) }
-                            )
-                        }
+                val listState = rememberLazyListState()
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),            // ✅ esto hace que el listado use el “resto” del panel
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 8.dp)
+                ) {
+                    items(
+                        items = positions.sortedByDescending { it.valueNow },
+                        key = { it.ticker }
+                    ) { pos ->
+                        PositionRow(
+                            pos = pos,
+                            surface = inner,
+                            stroke = stroke,
+                            textStrong = textStrong,
+                            textSoft = textSoft,
+                            textMuted = textMuted,
+                            neutral = neutral,
+                            success = success,
+                            danger = danger,
+                            canTrade = canTrade,
+                            onBuy = { onBuy(pos.ticker) },
+                            onSell = { onSell(pos.ticker) }
+                        )
+                    }
                 }
             } else {
                 Spacer(Modifier.height(8.dp))
@@ -1367,7 +1386,10 @@ private fun PortfolioPanel(
                     style = MaterialTheme.typography.labelSmall,
                     color = textMuted
                 )
+
+                Spacer(Modifier.weight(1f)) // ✅ rellena el panel cuando está colapsado
             }
+
         }
     }
 }
@@ -1511,6 +1533,7 @@ private fun PositionRow(
 // =========================================================
 @Composable
 private fun TransactionsPanel(
+    modifier: Modifier = Modifier,   // ✅ AÑADIR
     txs: List<Transaction>,
     surface: Color,
     inner: Color,
@@ -1521,16 +1544,18 @@ private fun TransactionsPanel(
     neutral: Color
 ) {
     val shape = RoundedCornerShape(16.dp)
-    val last = txs.takeLast(8).reversed()
+    val ordered = txs.asReversed() // ✅ más recientes arriba
+    val listState = rememberLazyListState()
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier, // ✅ controlado por weight en el padre
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
+                .fillMaxSize()
                 .border(1.dp, stroke, shape)
                 .padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
@@ -1553,15 +1578,23 @@ private fun TransactionsPanel(
             Divider(color = stroke)
             Spacer(Modifier.height(10.dp))
 
-            if (last.isEmpty()) {
+            if (ordered.isEmpty()) {
                 Text(
                     text = "Aún no hay operaciones.",
                     style = MaterialTheme.typography.bodySmall,
                     color = textMuted
                 )
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    last.forEach { tx ->
+                // ✅ LISTA SCROLL INDEPENDIENTE
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 8.dp)
+                ) {
+                    items(items = ordered, key = { it.id }) { tx ->
                         TxRow(tx, inner, stroke, textStrong, textSoft, neutral)
                     }
                 }
@@ -2262,6 +2295,7 @@ private fun TradeChip(
 // =========================================================
 @Composable
 private fun ChartsPanel(
+    modifier: Modifier = Modifier,
     marketStocks: List<StockSnapshot>,
     positions: List<PositionSnapshot>,
     selectedTicker: String,
@@ -2290,7 +2324,6 @@ private fun ChartsPanel(
     val investedNow = positions.sumOf { it.invested }
     val pnlNow = totalValueNow - investedNow
 
-    // Distribución por sector (usando sector del stock por ticker)
     val sectorByTicker = marketStocks.associateBy({ it.ticker }, { it.sector })
     val bySector = positions
         .groupBy { sectorByTicker[it.ticker] ?: Sector.TECHNOLOGY }
@@ -2298,162 +2331,80 @@ private fun ChartsPanel(
         .toList()
         .sortedByDescending { it.second }
 
-    // PnL por posición
     val pnlByTicker = positions
         .map { it.ticker to it.pnlEuro }
         .sortedByDescending { it.second }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier, // 👈 antes: Modifier.fillMaxWidth()
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = surface),
         elevation = CardDefaults.cardElevation(2.dp)
     ) {
-        Column(
+        LazyColumn(
             modifier = Modifier
+                .fillMaxSize()
                 .border(1.dp, stroke, shape)
                 .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(bottom = 16.dp) // 👈 para que no se “coma” lo último
         ) {
-            // Header
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Gráficos",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = textStrong,
-                    modifier = Modifier.weight(1f)
-                )
-                val badgeShape = RoundedCornerShape(999.dp)
-                Box(
-                    modifier = Modifier
-                        .clip(badgeShape)
-                        .background(brand.copy(alpha = 0.14f))
-                        .border(1.dp, brand.copy(alpha = 0.30f), badgeShape)
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
+
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "Ticker: ${ticker.ifBlank { "--" }}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = brand,
+                        text = "Gráficos",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
+                        color = textStrong,
+                        modifier = Modifier.weight(1f)
                     )
-                }
-            }
-
-            // Selector rápido de ticker (simple y entregable)
-            if (marketStocks.isNotEmpty()) {
-                val top = marketStocks.take(8)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    top.forEach { s ->
-                        val sel = s.ticker == ticker
-                        val bg = if (sel) brand2.copy(alpha = 0.16f) else inner
-                        val br = if (sel) brand2.copy(alpha = 0.35f) else stroke
-                        val fg = if (sel) Color(0xFFEAF1FF) else textSoft
-
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(bg)
-                                .border(1.dp, br, RoundedCornerShape(999.dp))
-                                .clickable { onSelectTicker(s.ticker) }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = s.ticker,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = fg,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(brand.copy(alpha = 0.14f))
+                            .border(1.dp, brand.copy(alpha = 0.30f), RoundedCornerShape(999.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Ticker: ${ticker.ifBlank { "--" }}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = brand,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
                     }
                 }
             }
 
-            Divider(color = stroke)
+            item {
+                if (marketStocks.isNotEmpty()) {
+                    val top = marketStocks.take(12)
 
-            // 1) Línea: evolución de precio por ticker
-            ChartBlock(
-                title = "Precio · $ticker",
-                subtitle = if (hist.size < 2) "Sin histórico suficiente todavía" else "Últimos ${hist.size} puntos",
-                surface = inner,
-                stroke = stroke,
-                textStrong = textStrong,
-                textSoft = textSoft,
-                textMuted = textMuted
-            ) {
-                LineChart(
-                    values = hist,
-                    lineColor = brand,
-                    strokeColor = brand.copy(alpha = 0.25f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(140.dp)
-                )
-            }
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(end = 24.dp) // 👈 evita que el último chip quede “debajo” del scrollbar
+                    ) {
+                        items(items = top, key = { it.ticker }) { s ->
+                            val sel = s.ticker == ticker
+                            val bg = if (sel) brand2.copy(alpha = 0.16f) else inner
+                            val br = if (sel) brand2.copy(alpha = 0.35f) else stroke
+                            val fg = if (sel) Color(0xFFEAF1FF) else textSoft
 
-            // 2) Línea: evolución valor total del portfolio
-            ChartBlock(
-                title = "Valor total del portfolio",
-                subtitle = if (valueHistory.size < 2) "Sin histórico suficiente todavía" else "Últimos ${valueHistory.size} puntos",
-                surface = inner,
-                stroke = stroke,
-                textStrong = textStrong,
-                textSoft = textSoft,
-                textMuted = textMuted
-            ) {
-                LineChart(
-                    values = valueHistory,
-                    lineColor = if (pnlNow >= 0) success else danger,
-                    strokeColor = (if (pnlNow >= 0) success else danger).copy(alpha = 0.25f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(140.dp)
-                )
-            }
-
-            // 3) Tarta: distribución del portfolio por sector
-            ChartBlock(
-                title = "Distribución por sector",
-                subtitle = if (bySector.isEmpty()) "Sin posiciones todavía" else "Por valor actual (€)",
-                surface = inner,
-                stroke = stroke,
-                textStrong = textStrong,
-                textSoft = textSoft,
-                textMuted = textMuted
-            ) {
-                if (bySector.isEmpty()) {
-                    Text("Compra acciones para ver la distribución.", color = textMuted, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    val colors = bySector.map { (s, _) -> sectorColor(s, brand, brand2, success, danger, neutral) }
-                    DonutChart(
-                        values = bySector.map { it.second },
-                        colors = colors,
-                        stroke = stroke,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(160.dp)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        bySector.forEachIndexed { i, (sec, v) ->
-                            val c = colors.getOrNull(i) ?: neutral
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(10.dp)
-                                        .height(10.dp)
-                                        .clip(RoundedCornerShape(2.dp))
-                                        .background(c)
-                                )
-                                Spacer(Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(bg)
+                                    .border(1.dp, br, RoundedCornerShape(999.dp))
+                                    .clickable { onSelectTicker(s.ticker) }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
                                 Text(
-                                    text = "${sectorShort(sec)} · ${fmt2(v)} €",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = textSoft,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    text = s.ticker,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = fg,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -2461,46 +2412,99 @@ private fun ChartsPanel(
                 }
             }
 
-            // 4) Barras: beneficios/pérdidas por acción
-            ChartBlock(
-                title = "PnL por acción",
-                subtitle = if (pnlByTicker.isEmpty()) "Sin posiciones todavía" else "Barra centrada (0€) · positivo/negativo",
-                surface = inner,
-                stroke = stroke,
-                textStrong = textStrong,
-                textSoft = textSoft,
-                textMuted = textMuted
-            ) {
-                if (pnlByTicker.isEmpty()) {
-                    Text("Sin posiciones.", color = textMuted, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    val top = pnlByTicker.take(10)
-                    PnlBarsChart(
-                        items = top,
-                        positive = success,
-                        negative = danger,
-                        neutral = stroke,
+            item { Divider(color = stroke) }
+
+            item {
+                ChartBlock(
+                    title = "Precio · $ticker",
+                    subtitle = if (hist.size < 2) "Sin histórico suficiente todavía" else "Últimos ${hist.size} puntos",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft,
+                    textMuted = textMuted
+                ) {
+                    LineChart(
+                        values = hist,
+                        lineColor = brand,
+                        strokeColor = brand.copy(alpha = 0.25f),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(160.dp)
+                            .height(140.dp)
                     )
-                    Spacer(Modifier.height(8.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        top.forEach { (t, v) ->
-                            val c = when {
-                                v > 0.0001 -> success
-                                v < -0.0001 -> danger
-                                else -> neutral
-                            }
-                            val sign = if (v >= 0) "+" else ""
-                            Text(
-                                text = "$t · $sign${fmt2(v)} €",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = c,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
-                            )
-                        }
+                }
+            }
+
+            item {
+                ChartBlock(
+                    title = "Valor total del portfolio",
+                    subtitle = if (valueHistory.size < 2) "Sin histórico suficiente todavía" else "Últimos ${valueHistory.size} puntos",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft,
+                    textMuted = textMuted
+                ) {
+                    LineChart(
+                        values = valueHistory,
+                        lineColor = if (pnlNow >= 0) success else danger,
+                        strokeColor = (if (pnlNow >= 0) success else danger).copy(alpha = 0.25f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                    )
+                }
+            }
+
+            item {
+                ChartBlock(
+                    title = "Distribución por sector",
+                    subtitle = if (bySector.isEmpty()) "Sin posiciones todavía" else "Por valor actual (€)",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft,
+                    textMuted = textMuted
+                ) {
+                    if (bySector.isEmpty()) {
+                        Text("Compra acciones para ver la distribución.", color = textMuted, style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        val colors = bySector.map { (s, _) -> sectorColor(s, brand, brand2, success, danger, neutral) }
+                        DonutChart(
+                            values = bySector.map { it.second },
+                            colors = colors,
+                            stroke = stroke,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                        )
+                    }
+                }
+            }
+
+            item {
+                ChartBlock(
+                    title = "PnL por acción",
+                    subtitle = if (pnlByTicker.isEmpty()) "Sin posiciones todavía" else "Barra centrada (0€) · positivo/negativo",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft,
+                    textMuted = textMuted
+                ) {
+                    if (pnlByTicker.isEmpty()) {
+                        Text("Sin posiciones.", color = textMuted, style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        val top = pnlByTicker.take(10)
+                        PnlBarsChart(
+                            items = top,
+                            positive = success,
+                            negative = danger,
+                            neutral = stroke,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                        )
                     }
                 }
             }
