@@ -305,6 +305,7 @@ fun App() {
     var banner by remember { mutableStateOf<String?>(null) }
     var showCreateAlert by remember { mutableStateOf(false) }
 
+
     fun upsertAlert(rule: AlertRule) {
         val idx = alerts.indexOfFirst { it.id == rule.id }
         if (idx >= 0) alerts[idx] = rule else alerts.add(rule)
@@ -529,10 +530,12 @@ fun App() {
                     if (showStrategiesDialog) {
                         StrategiesConfigDialog(
                             strategiesRepo = strategiesRepo,
-                            ticker = selectedTicker.ifBlank { marketState.stocks.firstOrNull()?.ticker.orEmpty() },
+                            tickers = marketState.stocks.map { it.ticker },
+                            initialTicker = selectedTicker.ifBlank { marketState.stocks.firstOrNull()?.ticker.orEmpty() },
                             onClose = { showStrategiesDialog = false }
                         )
                     }
+
                 }
             }
         }
