@@ -103,7 +103,7 @@ import kotlinx.coroutines.launch
 import org.example.project.domain.strategy.InMemoryStrategiesRepository
 import org.example.project.domain.strategy.StrategyRule
 import org.example.project.domain.strategy.DipReference
-
+import org.example.project.domain.model.calculateStatistics
 
 
 // =========================================================
@@ -114,6 +114,8 @@ private enum class AppTab(val label: String, val glyph: String) {
     PORTFOLIO("Portfolio", "💼"),
     CHARTS("Gráficos", "📊"),
     ALERTS("Alertas", "🔔")
+    STATS("Estadísticas", "📈") // ✅ NUEVO
+
 }
 
 // =========================================================
@@ -263,7 +265,12 @@ fun App() {
         runCatching { engine.setPaused(!marketState.isPaused) }
             .onFailure { it.printStackTrace() }
     }
-
+    val statistics = remember(portfolioState.transactions, portfolioState.positions) {
+        calculateStatistics(
+            transactions = portfolioState.transactions,
+            positions = portfolioState.positions
+        )
+    }
     // =========================================================
     // CHART DATA (históricos in-memory, sin tocar repos)
     // =========================================================
@@ -831,6 +838,25 @@ private fun MainCard(
                         danger = p.danger
                     )
                     Spacer(Modifier.weight(1f))
+                }
+
+                AppTab.STATS -> {
+                    StatisticsPanel(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        stats = statistics,
+                        surface = p.surface1,
+                        inner = p.surface2,
+                        stroke = p.strokeSoft,
+                        textStrong = p.textStrong,
+                        textSoft = p.textSoft,
+                        textMuted = p.textMuted,
+                        neutral = p.neutral,
+                        success = p.success,
+                        danger = p.danger,
+                        brand = p.brand
+                    )
                 }
             }
         }
@@ -3386,4 +3412,427 @@ private fun pow10(decimals: Int): Long {
     var p = 1L
     repeat(decimals.coerceAtLeast(0)) { p *= 10L }
     return p
+}
+// =========================================================
+// STATISTICS PANEL (agregar al final de App.kt, antes de los helpers)
+// =========================================================
+
+@Composable
+private fun StatisticsPanel(
+    modifier: Modifier = Modifier,
+    stats: PortfolioStatistics,
+    surface: Color,
+    inner: Color,
+    stroke: Color,
+    textStrong: Color,
+    textSoft: Color,
+    textMuted: Color,
+    neutral: Color,
+    success: Color,
+    danger: Color,
+    brand: Color
+) {
+    val shape = RoundedCornerShape(16.dp)
+
+    Card(
+        modifier = modifier,
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = surface),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .border(1.dp, stroke, shape)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(bottom = 16.dp)
+        ) {
+            // Header
+            item {
+                Text(
+                    text = "📊 Estadísticas del Portfolio",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = textStrong
+                )
+            }
+
+            item { Divider(color = stroke) }
+
+            // === 1. MEJOR/PEOR TRANSACCIÓN ===
+            item {
+                StatSection(
+                    title = "🏆 Transacciones destacadas",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // Mejor
+                        if (stats.bestTransaction != null) {
+                            TransactionCard(
+                                label = "✅ MEJOR",
+                                tx = stats.bestTransaction,
+                                color = success,
+                                surface = inner,
+                                stroke = stroke,
+                                textStrong = textStrong,
+                                textSoft = textSoft
+                            )
+                        } else {
+                            Text(
+                                "No hay ventas registradas todavía",
+                                color = textMuted,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        // Peor
+                        if (stats.worstTransaction != null) {
+                            TransactionCard(
+                                label = "⚠️ PEOR",
+                                tx = stats.worstTransaction,
+                                color = danger,
+                                surface = inner,
+                                stroke = stroke,
+                                textStrong = textStrong,
+                                textSoft = textSoft
+                            )
+                        }
+                    }
+                }
+            }
+
+            // === 2. ACCIÓN MÁS RENTABLE ===
+            item {
+                StatSection(
+                    title = "💎 Acción más rentable",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft
+                ) {
+                    if (stats.mostProfitableStock != null) {
+                        val stock = stats.mostProfitableStock
+                        StockCard(
+                            stock = stock,
+                            color = if (stock.pnlPercent >= 0) success else danger,
+                            surface = inner,
+                            stroke = stroke,
+                            textStrong = textStrong,
+                            textSoft = textSoft
+                        )
+                    } else {
+                        Text(
+                            "No hay posiciones abiertas",
+                            color = textMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            // === 3. TASA DE ÉXITO ===
+            item {
+                StatSection(
+                    title = "🎯 Tasa de éxito",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Barra de progreso
+                        val successColor = when {
+                            stats.successRate >= 70 -> success
+                            stats.successRate >= 50 -> brand
+                            else -> danger
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${fmt1(stats.successRate)}%",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = successColor
+                            )
+
+                            Text(
+                                text = "${stats.profitableSells} / ${stats.totalSells} ventas con beneficio",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = textSoft
+                            )
+                        }
+
+                        // Progress bar
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(12.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(stroke)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(
+                                        fraction = (stats.successRate / 100.0)
+                                            .toFloat()
+                                            .coerceIn(0f, 1f)
+                                    )
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(successColor)
+                            )
+                        }
+
+                        if (stats.totalSells > 0) {
+                            Text(
+                                text = "De tus ${stats.totalSells} ventas, ${stats.profitableSells} generaron beneficio",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = textMuted
+                            )
+                        } else {
+                            Text(
+                                text = "Aún no has realizado ventas",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = textMuted
+                            )
+                        }
+                    }
+                }
+            }
+
+            // === 4. RENTABILIDAD MEDIA ===
+            item {
+                StatSection(
+                    title = "📈 Rentabilidad media del portfolio",
+                    surface = inner,
+                    stroke = stroke,
+                    textStrong = textStrong,
+                    textSoft = textSoft
+                ) {
+                    if (stats.totalPositions > 0) {
+                        val avgColor = when {
+                            stats.averageProfitability > 0 -> success
+                            stats.averageProfitability < 0 -> danger
+                            else -> neutral
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${if (stats.averageProfitability >= 0) "+" else ""}${fmt2(stats.averageProfitability)}%",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = avgColor
+                                )
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(avgColor.copy(alpha = 0.14f))
+                                        .border(1.dp, avgColor.copy(alpha = 0.30f), RoundedCornerShape(999.dp))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = "${stats.totalPositions} posiciones",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = avgColor,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
+                            Text(
+                                text = "Promedio de rentabilidad de todas tus posiciones actuales",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = textMuted
+                            )
+                        }
+                    } else {
+                        Text(
+                            "No hay posiciones abiertas",
+                            color = textMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatSection(
+    title: String,
+    surface: Color,
+    stroke: Color,
+    textStrong: Color,
+    textSoft: Color,
+    content: @Composable () -> Unit
+) {
+    val shape = RoundedCornerShape(14.dp)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(surface)
+            .border(1.dp, stroke, shape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = textStrong
+        )
+        content()
+    }
+}
+
+@Composable
+private fun TransactionCard(
+    label: String,
+    tx: TransactionSummary,
+    color: Color,
+    surface: Color,
+    stroke: Color,
+    textStrong: Color,
+    textSoft: Color
+) {
+    val shape = RoundedCornerShape(12.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(color.copy(alpha = 0.08f))
+            .border(1.dp, color.copy(alpha = 0.25f), shape)
+            .padding(12.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = color
+                )
+
+                Text(
+                    text = tx.ticker,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = textStrong
+                )
+            }
+
+            Text(
+                text = "${if (tx.profitLoss >= 0) "+" else ""}${fmt2(tx.profitLoss)}€ (${if (tx.profitLossPercent >= 0) "+" else ""}${fmt2(tx.profitLossPercent)}%)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+
+            Text(
+                text = "${tx.quantity} acciones · ${fmt2(tx.pricePerShare)}€/acción · Total: ${fmt2(tx.netTotal)}€",
+                style = MaterialTheme.typography.bodySmall,
+                color = textSoft
+            )
+
+            Text(
+                text = tx.timestamp,
+                style = MaterialTheme.typography.labelSmall,
+                color = textSoft.copy(alpha = 0.7f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StockCard(
+    stock: StockProfitability,
+    color: Color,
+    surface: Color,
+    stroke: Color,
+    textStrong: Color,
+    textSoft: Color
+) {
+    val shape = RoundedCornerShape(12.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(color.copy(alpha = 0.08f))
+            .border(1.dp, color.copy(alpha = 0.25f), shape)
+            .padding(12.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stock.ticker,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = textStrong
+                )
+
+                Text(
+                    text = "${if (stock.pnlPercent >= 0) "+" else ""}${fmt2(stock.pnlPercent)}%",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = color
+                )
+            }
+
+            Text(
+                text = "${if (stock.pnlEuro >= 0) "+" else ""}${fmt2(stock.pnlEuro)}€",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = color
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Invertido: ${fmt2(stock.invested)}€",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textSoft
+                )
+                Text(
+                    text = "Valor actual: ${fmt2(stock.currentValue)}€",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textSoft
+                )
+            }
+
+            Text(
+                text = "${stock.quantity} acciones",
+                style = MaterialTheme.typography.labelSmall,
+                color = textSoft.copy(alpha = 0.7f)
+            )
+        }
+    }
 }
