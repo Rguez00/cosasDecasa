@@ -90,6 +90,7 @@ import kotlin.math.min
 import kotlin.math.roundToLong
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
@@ -104,7 +105,9 @@ import org.example.project.domain.strategy.InMemoryStrategiesRepository
 import org.example.project.domain.strategy.StrategyRule
 import org.example.project.domain.strategy.DipReference
 import org.example.project.domain.model.calculateStatistics
-
+import org.example.project.domain.model.PortfolioStatistics
+import org.example.project.domain.model.TransactionSummary
+import org.example.project.domain.model.StockProfitability
 
 // =========================================================
 // NAV
@@ -113,7 +116,7 @@ private enum class AppTab(val label: String, val glyph: String) {
     MARKET("Mercado", "📈"),
     PORTFOLIO("Portfolio", "💼"),
     CHARTS("Gráficos", "📊"),
-    ALERTS("Alertas", "🔔")
+    ALERTS("Alertas", "🔔"),
     STATS("Estadísticas", "📈") // ✅ NUEVO
 
 }
@@ -454,7 +457,8 @@ fun App() {
                                 onCreateAlert = { showCreateAlert = true },
                                 onUpdateAlert = { upsertAlert(it) },
                                 onDeleteAlert = { id -> alerts.removeAll { it.id == id } },
-                                onOpenStrategies = { showStrategiesDialog = true }
+                                onOpenStrategies = { showStrategiesDialog = true },
+                                statistics = statistics  // ✅ NUEVO
                             )
                         }
                     } else {
@@ -496,7 +500,8 @@ fun App() {
                             onCreateAlert = { showCreateAlert = true },
                             onUpdateAlert = { upsertAlert(it) },
                             onDeleteAlert = { id -> alerts.removeAll { it.id == id } },
-                            onOpenStrategies = { showStrategiesDialog = true }
+                            onOpenStrategies = { showStrategiesDialog = true },
+                            statistics = statistics  // ✅ NUEVO
                         )
                     }
 
@@ -590,6 +595,7 @@ private fun MainCard(
     onUpdateAlert: (AlertRule) -> Unit,
     onDeleteAlert: (Long) -> Unit,
     onOpenStrategies: () -> Unit,
+    statistics: PortfolioStatistics  // ✅ AGREGAR ESTO
 
     ) {
     val mainShape = RoundedCornerShape(20.dp)
