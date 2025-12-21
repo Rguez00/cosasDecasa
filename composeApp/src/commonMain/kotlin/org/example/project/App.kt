@@ -1,5 +1,6 @@
 package org.example.project
 
+import org.example.project.presentation.strategies.StrategiesConfigDialog
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
@@ -93,6 +94,16 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.unit.Dp
+import org.example.project.presentation.state.MarketState
+import org.example.project.presentation.state.PortfolioState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import org.example.project.domain.strategy.InMemoryStrategiesRepository
+import org.example.project.domain.strategy.StrategyRule
+import org.example.project.domain.strategy.DipReference
+
 
 
 // =========================================================
@@ -141,11 +152,60 @@ private data class FiredAlert(
 @Composable
 @Preview
 fun App() {
-    // Repos / engine / vm
-    val marketRepo = remember { InMemoryMarketRepository(InitialData.defaultStocks()) }
-    val engine = remember { MarketEngine(marketRepo) }
+    // Scope ligado al ciclo de vida de Compose (se cancela al salir)
+    val appScope = rememberCoroutineScope()
 
+    // Repos
+    val marketRepo = remember { InMemoryMarketRepository(InitialData.defaultStocks()) }
     val portfolioRepo = remember { InMemoryPortfolioRepository(marketRepo) }
+    val strategiesRepo = remember { InMemoryStrategiesRepository() }
+
+    // Engine (ahora ya tiene todo lo que necesita)
+    val engine = remember {
+        MarketEngine(
+            marketRepo = marketRepo,
+            portfolioRepo = portfolioRepo,
+            strategiesRepo = strategiesRepo,
+            externalScope = appScope
+        )
+    }
+
+    // (Opcional pero recomendado) Cargar reglas demo una sola vez
+    LaunchedEffect(Unit) {
+        // 🔧 Cambia "NBS" por el ticker que quieras probar
+        strategiesRepo.upsert(
+            StrategyRule.AutoBuyDip(
+                id = 1,
+                ticker = "NBS",
+                dropPercent = 2.0,
+                reference = DipReference.OPEN,
+                budgetEuro = 250.0,
+                cooldownMs = 12_000L
+            )
+        )
+
+        strategiesRepo.upsert(
+            StrategyRule.TakeProfit(
+                id = 2,
+                ticker = "NBS",
+                profitPercent = 3.0,
+                sellFraction = 1.0,
+                cooldownMs = 12_000L
+            )
+        )
+
+        strategiesRepo.upsert(
+            StrategyRule.StopLoss(
+                id = 3,
+                ticker = "NBS",
+                lossPercent = 3.0,
+                sellFraction = 1.0,
+                cooldownMs = 12_000L
+            )
+        )
+    }
+
+    // VM
     val portfolioVm = remember {
         PortfolioViewModel(
             repo = portfolioRepo,
@@ -154,6 +214,7 @@ fun App() {
     }
 
     LaunchedEffect(Unit) { engine.startAllTickers() }
+
     DisposableEffect(Unit) {
         onDispose {
             engine.close()
@@ -169,6 +230,7 @@ fun App() {
     // UI state
     var tabKey by rememberSaveable { mutableStateOf(AppTab.MARKET.name) }
     val tab = AppTab.valueOf(tabKey)
+    var showStrategiesDialog by rememberSaveable { mutableStateOf(false) }
 
     var selectedTicker by rememberSaveable { mutableStateOf("NBS") }
     var showFeatured by rememberSaveable { mutableStateOf(false) }
@@ -325,6 +387,7 @@ fun App() {
                         .padding(pad),
                     color = Color.Gray
                 ) {
+
                     val outerPad = 6.dp
                     val innerPadH = 8.dp
                     val innerPadV = 8.dp
@@ -382,7 +445,8 @@ fun App() {
                                 onDismissBanner = { banner = null },
                                 onCreateAlert = { showCreateAlert = true },
                                 onUpdateAlert = { upsertAlert(it) },
-                                onDeleteAlert = { id -> alerts.removeAll { it.id == id } }
+                                onDeleteAlert = { id -> alerts.removeAll { it.id == id } },
+                                onOpenStrategies = { showStrategiesDialog = true }
                             )
                         }
                     } else {
@@ -423,7 +487,8 @@ fun App() {
                             onDismissBanner = { banner = null },
                             onCreateAlert = { showCreateAlert = true },
                             onUpdateAlert = { upsertAlert(it) },
-                            onDeleteAlert = { id -> alerts.removeAll { it.id == id } }
+                            onDeleteAlert = { id -> alerts.removeAll { it.id == id } },
+                            onOpenStrategies = { showStrategiesDialog = true }
                         )
                     }
 
@@ -460,6 +525,14 @@ fun App() {
                             }
                         )
                     }
+                    // ✅ Dialog: configurar estrategias automáticas
+                    if (showStrategiesDialog) {
+                        StrategiesConfigDialog(
+                            strategiesRepo = strategiesRepo,
+                            ticker = selectedTicker.ifBlank { marketState.stocks.firstOrNull()?.ticker.orEmpty() },
+                            onClose = { showStrategiesDialog = false }
+                        )
+                    }
                 }
             }
         }
@@ -473,11 +546,11 @@ fun App() {
 private fun MainCard(
     modifier: Modifier,
     p: AppPalette,
-    sectionGap: androidx.compose.ui.unit.Dp,
-    innerPadH: androidx.compose.ui.unit.Dp,
-    innerPadV: androidx.compose.ui.unit.Dp,
-    marketState: org.example.project.presentation.state.MarketState,
-    portfolioState: org.example.project.presentation.state.PortfolioState,
+    sectionGap: Dp,
+    innerPadH: Dp,
+    innerPadV: Dp,
+    marketState: MarketState,
+    portfolioState: PortfolioState,
     tab: AppTab,
     featured: StockSnapshot?,
     selectedTicker: String,
@@ -505,8 +578,10 @@ private fun MainCard(
     onDismissBanner: () -> Unit,
     onCreateAlert: () -> Unit,
     onUpdateAlert: (AlertRule) -> Unit,
-    onDeleteAlert: (Long) -> Unit
-) {
+    onDeleteAlert: (Long) -> Unit,
+    onOpenStrategies: () -> Unit,
+
+    ) {
     val mainShape = RoundedCornerShape(20.dp)
 
     Card(
@@ -647,43 +722,61 @@ private fun MainCard(
                     val wPortfolio = if (showPortfolioExpanded) 0.62f else 0.32f
                     val wTx = 1f - wPortfolio
 
-                    PortfolioPanel(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(wPortfolio),
-                        positions = portfolioState.positions,
-                        show = showPortfolioExpanded,
-                        onToggle = onTogglePortfolio,
-                        surface = p.surface1,
-                        inner = p.surface2,
-                        stroke = p.strokeSoft,
-                        textStrong = p.textStrong,
-                        textSoft = p.textSoft,
-                        textMuted = p.textMuted,
-                        neutral = p.neutral,
-                        success = p.success,
-                        danger = p.danger,
-                        canTrade = canTrade,
-                        onBuy = onBuy,
-                        onSell = onSell
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        // ✅ Fila propia para el botón (no se superpone)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Button(onClick = onOpenStrategies) {
+                                Text("⚙ Estrategias automáticas")
+                            }
 
-                    Spacer(Modifier.height(sectionGap))
+                        }
 
-                    TransactionsPanel(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(wTx),
-                        txs = portfolioState.transactions,
-                        surface = p.surface1,
-                        inner = p.surface2,
-                        stroke = p.strokeSoft,
-                        textStrong = p.textStrong,
-                        textSoft = p.textSoft,
-                        textMuted = p.textMuted,
-                        neutral = p.neutral
-                    )
+                        Spacer(Modifier.height(sectionGap))
+
+                        PortfolioPanel(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(wPortfolio),
+                            positions = portfolioState.positions,
+                            show = showPortfolioExpanded,
+                            onToggle = onTogglePortfolio,
+                            surface = p.surface1,
+                            inner = p.surface2,
+                            stroke = p.strokeSoft,
+                            textStrong = p.textStrong,
+                            textSoft = p.textSoft,
+                            textMuted = p.textMuted,
+                            neutral = p.neutral,
+                            success = p.success,
+                            danger = p.danger,
+                            canTrade = canTrade,
+                            onBuy = onBuy,
+                            onSell = onSell
+                        )
+
+                        Spacer(Modifier.height(sectionGap))
+
+                        TransactionsPanel(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(wTx),
+                            txs = portfolioState.transactions,
+                            surface = p.surface1,
+                            inner = p.surface2,
+                            stroke = p.strokeSoft,
+                            textStrong = p.textStrong,
+                            textSoft = p.textSoft,
+                            textMuted = p.textMuted,
+                            neutral = p.neutral
+                        )
+                    }
                 }
+
 
 
                 AppTab.CHARTS -> {
@@ -2568,7 +2661,7 @@ private fun LineChart(
             color = strokeColor.copy(alpha = 0.25f),
             topLeft = Offset(0f, 0f),
             size = Size(w, h),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
+            cornerRadius = CornerRadius(16f, 16f),
             style = Stroke(width = 1.2f)
         )
 
@@ -3247,11 +3340,19 @@ private fun CreateAlertDialog(
                     ) {
                         Text("Crear", maxLines = 1)
                     }
+
                 }
+
             }
+
         }
+
     }
+
+
 }
+
+
 
 // =========================================================
 // Formatters KMP-safe (✅ anti NaN/Infinity)

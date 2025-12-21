@@ -4,24 +4,30 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.StateFlow
 import org.example.project.data.repository.MarketRepository
+import org.example.project.data.repository.PortfolioRepository
+import org.example.project.domain.strategy.RepoStrategyMarketBridge
+import org.example.project.domain.strategy.RepoStrategyPortfolioBridge
+import org.example.project.domain.strategy.StrategiesRepository
+import org.example.project.domain.strategy.StrategyEngine
 import org.example.project.presentation.state.MarketState
 
 /**
  * Motor de simulación:
  * - 1 coroutine por ticker.
  * - 2 coroutines globales: tendencia + noticias.
- * - Permite pausar/reanudar, abrir/cerrar mercado y cambiar velocidad.
+ * - + Estrategias automáticas (StrategyEngine) escuchando cambios de precios.
  *
  * Corrección importante:
  * - Acceso thread-safe a updaterJobs y jobs globales (control serializado).
- * - Cuando se PAUSA o se CIERRA el mercado: se paran tickers + news/trend.
+ * - Cuando se PAUSA o se CIERRA el mercado: se paran tickers + news/trend + strategies.
  */
 class MarketEngine(
     private val marketRepo: MarketRepository,
+    private val portfolioRepo: PortfolioRepository,
+    private val strategiesRepo: StrategiesRepository,
     externalScope: CoroutineScope? = null
 ) {
     // Job del engine:
@@ -42,6 +48,9 @@ class MarketEngine(
     // Jobs globales
     private var trendJob: Job? = null
     private var newsJob: Job? = null
+
+    // Estrategias automáticas
+    private var strategyEngine: StrategyEngine? = null
 
     // Reutilizamos updater (no crear objetos en bucle)
     private val updater = SingleStockPriceUpdater(marketRepo)
@@ -72,6 +81,7 @@ class MarketEngine(
             if (!st.isOpen || st.isPaused) return@launch
 
             startGlobalGeneratorsIfNeededLocked()
+            startStrategiesIfNeededLocked()
             startTickerLocked(t)
         }
     }
@@ -93,7 +103,7 @@ class MarketEngine(
     }
 
     /**
-     * Para TODO (tickers + generators) sin cerrar el engine.
+     * Para TODO (tickers + generators + strategies) sin cerrar el engine.
      * Útil si quisieras “resetear” en runtime.
      */
     fun stopAll() {
@@ -101,6 +111,7 @@ class MarketEngine(
         controlScope.launch {
             stopAllTickersLocked()
             stopGlobalGeneratorsLocked()
+            stopStrategiesLocked()
         }
     }
 
@@ -114,6 +125,7 @@ class MarketEngine(
         controlScope.launch {
             stopAllTickersLocked()
             stopGlobalGeneratorsLocked()
+            stopStrategiesLocked()
         }.invokeOnCompletion {
             // cancela todo el árbol de jobs (worker + control)
             engineJob.cancel()
@@ -162,11 +174,13 @@ class MarketEngine(
             // congelar TODO
             stopAllTickersLocked()
             stopGlobalGeneratorsLocked()
+            stopStrategiesLocked()
             return
         }
 
         // mercado abierto y no pausado => arrancar TODO
         startGlobalGeneratorsIfNeededLocked()
+        startStrategiesIfNeededLocked()
 
         val stocks = marketState.value.stocks
         for (s in stocks) {
@@ -212,6 +226,25 @@ class MarketEngine(
         newsJob?.cancel()
         trendJob = null
         newsJob = null
+    }
+
+    // ============================================================
+    // Estrategias (SIEMPRE en controlScope)
+    // ============================================================
+
+    private fun startStrategiesIfNeededLocked() {
+        if (strategyEngine != null) return
+
+        strategyEngine = StrategyEngine(
+            market = RepoStrategyMarketBridge(marketRepo),
+            portfolio = RepoStrategyPortfolioBridge(portfolioRepo),
+            strategiesRepo = strategiesRepo
+        ).also { it.start() }
+    }
+
+    private fun stopStrategiesLocked() {
+        strategyEngine?.close()
+        strategyEngine = null
     }
 
     // ============================================================
