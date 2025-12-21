@@ -1,3 +1,22 @@
+# Revision 21/12/25
+
+Falta añadir el símbolo "Ticker". Entiendo que es el logo de la empresa, no solo las iniciales
+Precio de apertura del dia? No se ven las fechas.
+Historial de precios
+Comprobar si un evento de un sector afecta a todas las empresas de ese sector
+Al vender unas acciones, se realiza la accion pero se muestra igual un mensaje de error.
+En la sección de Transacciones, falta la opcion de exportar a CSV y la comision.
+Tablas de cotizaciones???
+Debe salir una notificacion general en el movil cuando salte una alerta?
+Implementar Funcionalidades Avanzadas
+
+
+
+
+
+
+
+
 Proyecto 2: Simulador de Mercado Bursátil en Tiempo Real 📈
 Plataformas: Kotlin Multiplatform (Escritorio Windows + Android)
 
