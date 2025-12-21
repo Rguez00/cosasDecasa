@@ -33,8 +33,7 @@ class InMemoryPortfolioRepository(
 
     private val job: Job? = if (externalScope == null) SupervisorJob() else null
     private val scope: CoroutineScope =
-        externalScope ?: CoroutineScope(Dispatchers.Default + job!!)
-
+        externalScope ?: CoroutineScope(Dispatchers.Main.immediate + job!!)
     private val mutex = Mutex()
 
     private var cash: Double = initialCash
@@ -168,8 +167,8 @@ class InMemoryPortfolioRepository(
 
             val tx = Transaction(
                 id = nextTxId++,
-                timestamp = Clock.System.now(),
-                type = TransactionType.BUY,
+                timestamp = System.currentTimeMillis(), // ✅ SIMPLE Y FUNCIONA
+                type = TransactionType.BUY, // o SELL
                 ticker = t,
                 companyName = snap.name,
                 sector = snap.sector,
@@ -214,8 +213,8 @@ class InMemoryPortfolioRepository(
 
             val tx = Transaction(
                 id = nextTxId++,
-                timestamp = Clock.System.now(),
-                type = TransactionType.SELL,
+                timestamp = System.currentTimeMillis(), // ✅ SIMPLE Y FUNCIONA
+                type = TransactionType.SELL, // o SELL
                 ticker = t,
                 companyName = snap.name,
                 sector = snap.sector,

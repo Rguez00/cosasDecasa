@@ -6,7 +6,7 @@ import kotlin.math.max
 
 data class Transaction(
     val id: Int,
-    val timestamp: Instant,
+    val timestamp: Long,
 
     val type: TransactionType,
 

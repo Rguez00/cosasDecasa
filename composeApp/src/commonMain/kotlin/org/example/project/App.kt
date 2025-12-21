@@ -95,6 +95,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.unit.Dp
 import org.example.project.presentation.state.MarketState
@@ -268,11 +269,14 @@ fun App() {
         runCatching { engine.setPaused(!marketState.isPaused) }
             .onFailure { it.printStackTrace() }
     }
-    val statistics = remember(portfolioState.transactions, portfolioState.positions) {
-        calculateStatistics(
-            transactions = portfolioState.transactions,
-            positions = portfolioState.positions
-        )
+    // ✅ Solución: usar derivedStateOf en lugar de remember
+    val statistics by remember {
+        derivedStateOf {
+            calculateStatistics(
+                transactions = portfolioState.transactions,
+                positions = portfolioState.positions
+            )
+        }
     }
     // =========================================================
     // CHART DATA (históricos in-memory, sin tocar repos)

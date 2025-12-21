@@ -55,6 +55,13 @@ fun calculateStatistics(
     positions: List<PositionSnapshot>
 ): PortfolioStatistics {
 
+    // 🐛 DEBUG - AGREGAR ESTAS LÍNEAS
+    println("=== DEBUG STATISTICS (Desktop) ===")
+    println("Total transacciones: ${transactions.size}")
+    transactions.forEach { tx ->
+        println("TX #${tx.id}: ${tx.type} - ${tx.ticker} x${tx.quantity} @ ${tx.pricePerShare}€")
+    }
+
     // === 1. MEJOR/PEOR TRANSACCIÓN ===
     // Para calcular beneficio de una venta, necesitamos encontrar la compra correspondiente
     val sells = transactions.filter { it.type == TransactionType.SELL }
