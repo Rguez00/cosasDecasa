@@ -55,19 +55,12 @@ fun calculateStatistics(
     positions: List<PositionSnapshot>
 ): PortfolioStatistics {
 
-    // 🐛 DEBUG - AGREGAR ESTAS LÍNEAS
-    println("=== DEBUG STATISTICS (Desktop) ===")
-    println("Total transacciones: ${transactions.size}")
-    transactions.forEach { tx ->
-        println("TX #${tx.id}: ${tx.type} - ${tx.ticker} x${tx.quantity} @ ${tx.pricePerShare}€")
-    }
-
     // === 1. MEJOR/PEOR TRANSACCIÓN ===
-    // Para calcular beneficio de una venta, necesitamos encontrar la compra correspondiente
+    // Para calcular beneficio de una venta, usamos coste medio ponderado (WAC) a partir de compras netas (incluye comisiones)
     val sells = transactions.filter { it.type == TransactionType.SELL }
     val buys = transactions.filter { it.type == TransactionType.BUY }
 
-    // Mapear compras por ticker (precio promedio de compra)
+    // Mapear compras por ticker (precio promedio de compra NETO)
     val avgBuyPrices = buys
         .groupBy { it.ticker }
         .mapValues { (_, txList) ->
@@ -76,11 +69,11 @@ fun calculateStatistics(
             if (totalQty > 0) totalCost / totalQty else 0.0
         }
 
-    // Calcular beneficio de cada venta
+    // Calcular beneficio de cada venta (revenue NETO: lo que realmente entra tras comisión)
     val sellSummaries = sells.map { sell ->
         val avgBuyPrice = avgBuyPrices[sell.ticker] ?: sell.pricePerShare
         val costBasis = avgBuyPrice * sell.quantity
-        val revenue = sell.grossTotal
+        val revenue = sell.netTotal
         val profitLoss = revenue - costBasis
         val profitLossPercent = if (costBasis > 0) (profitLoss / costBasis) * 100.0 else 0.0
 
@@ -92,7 +85,7 @@ fun calculateStatistics(
             netTotal = sell.netTotal,
             profitLoss = profitLoss,
             profitLossPercent = profitLossPercent,
-            timestamp = sell.timestamp.toString().take(19)
+            timestamp = sell.timestamp.toString()
         )
     }
 

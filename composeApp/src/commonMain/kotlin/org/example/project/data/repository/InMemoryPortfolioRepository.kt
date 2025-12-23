@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.datetime.Clock
 import org.example.project.data.repository.PortfolioError.*
 import org.example.project.domain.model.Holding
 import org.example.project.domain.model.PortfolioSnapshot
@@ -150,33 +149,39 @@ class InMemoryPortfolioRepository(
                 return@withLock Result.failure(InsufficientCash(required = net, available = cash))
             }
 
+            // 1) Caja: siempre neto
             cash -= net
             if (cash in -EPS..0.0) cash = 0.0
 
+            // 2) Coste medio: SIEMPRE neto (incluye comisión)
             val current = holdingsMap[t]
             val newHolding = if (current == null) {
-                Holding(ticker = t, quantity = quantity, avgBuyPrice = price)
+                val effectivePrice = net / quantity.toDouble()
+                Holding(ticker = t, quantity = quantity, avgBuyPrice = effectivePrice)
             } else {
                 val oldQty = current.quantity
                 val newQty = oldQty + quantity
-                val newAvg =
-                    ((current.avgBuyPrice * oldQty) + (price * quantity)) / newQty.toDouble()
+
+                val oldBasis = current.avgBuyPrice * oldQty.toDouble() // ya incluye comisiones previas
+                val newBasis = oldBasis + net                          // añadimos coste neto de esta compra
+                val newAvg = newBasis / newQty.toDouble()
+
                 current.copy(quantity = newQty, avgBuyPrice = newAvg)
             }
             holdingsMap[t] = newHolding
 
             val tx = Transaction(
                 id = nextTxId++,
-                timestamp = System.currentTimeMillis(), // ✅ SIMPLE Y FUNCIONA
-                type = TransactionType.BUY, // o SELL
+                timestamp = System.currentTimeMillis(),
+                type = TransactionType.BUY,
                 ticker = t,
                 companyName = snap.name,
                 sector = snap.sector,
                 quantity = quantity,
-                pricePerShare = price,
+                pricePerShare = price,     // precio de mercado (bruto), OK para mostrar
                 grossTotal = gross,
                 commission = commission,
-                netTotal = net
+                netTotal = net             // lo que realmente sale de caja
             )
             transactions.add(tx)
 
@@ -184,6 +189,7 @@ class InMemoryPortfolioRepository(
             Result.success(tx)
         }
     }
+
 
     override suspend fun sell(ticker: String, quantity: Int): Result<Transaction> {
         val t = normalizeTicker(ticker)
