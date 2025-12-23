@@ -1,43 +1,15 @@
 package org.example.project.domain.model
 
-/**
- * Estadísticas calculadas a partir de transacciones y posiciones
- */
-data class PortfolioStatistics(
-    // 1. Mejor/Peor transacción (solo SELL)
-    val bestTransaction: TransactionSummary?,
-    val worstTransaction: TransactionSummary?,
-
-    // 2. Acción más rentable (posiciones actuales)
-    val mostProfitableStock: StockProfitability?,
-
-    // 3. Tasa de éxito
-    val successRate: Double,  // % de ventas con beneficio
-    val totalSells: Int,
-    val profitableSells: Int,
-
-    // 4. Rentabilidad media
-    val averageProfitability: Double,  // Promedio de PnL% de todas las posiciones
-    val totalPositions: Int
-)
-
-/**
- * Resumen simplificado de una transacción para mostrar en UI
- */
 data class TransactionSummary(
-    val id: Int,
     val ticker: String,
     val quantity: Int,
     val pricePerShare: Double,
     val netTotal: Double,
-    val profitLoss: Double,  // Beneficio/pérdida calculado
+    val profitLoss: Double,
     val profitLossPercent: Double,
     val timestamp: String
 )
 
-/**
- * Rentabilidad de una acción específica
- */
 data class StockProfitability(
     val ticker: String,
     val quantity: Int,
@@ -47,82 +19,100 @@ data class StockProfitability(
     val pnlPercent: Double
 )
 
+data class PortfolioStatistics(
+    val bestTransaction: TransactionSummary?,
+    val worstTransaction: TransactionSummary?,
+    val mostProfitableStock: StockProfitability?,
+    val successRate: Double,
+    val profitableSells: Int,
+    val totalSells: Int,
+    val averageProfitability: Double,
+    val totalPositions: Int
+)
+
 /**
- * Función para calcular estadísticas a partir de transacciones y posiciones
+ * Estadísticas:
+ * - Reconstruye coste medio por ticker con BUY (netTotal incluye comisión)
+ * - Calcula beneficio por SELL: sell.netTotal - coste_removido
  */
 fun calculateStatistics(
     transactions: List<Transaction>,
     positions: List<PositionSnapshot>
 ): PortfolioStatistics {
 
-    // === 1. MEJOR/PEOR TRANSACCIÓN ===
-    // Para calcular beneficio de una venta, usamos coste medio ponderado (WAC) a partir de compras netas (incluye comisiones)
-    val sells = transactions.filter { it.type == TransactionType.SELL }
-    val buys = transactions.filter { it.type == TransactionType.BUY }
+    data class CostState(var qty: Int = 0, var cost: Double = 0.0)
 
-    // Mapear compras por ticker (precio promedio de compra NETO)
-    val avgBuyPrices = buys
-        .groupBy { it.ticker }
-        .mapValues { (_, txList) ->
-            val totalCost = txList.sumOf { it.netTotal }
-            val totalQty = txList.sumOf { it.quantity }
-            if (totalQty > 0) totalCost / totalQty else 0.0
+    val states = mutableMapOf<String, CostState>()
+    val sells = mutableListOf<TransactionSummary>()
+
+    val orderedTx = transactions.sortedBy { it.timestamp }
+
+    for (tx in orderedTx) {
+        val st = states.getOrPut(tx.ticker) { CostState() }
+
+        when (tx.type) {
+            TransactionType.BUY -> {
+                st.qty += tx.quantity
+                st.cost += tx.netTotal // incluye comisión
+            }
+
+            TransactionType.SELL -> {
+                val sellQty = tx.quantity
+                val avgCost = if (st.qty > 0) st.cost / st.qty.toDouble() else 0.0
+                val removedCost = avgCost * sellQty.toDouble()
+
+                st.qty = (st.qty - sellQty).coerceAtLeast(0)
+                st.cost = (st.cost - removedCost).coerceAtLeast(0.0)
+
+                val profit = tx.netTotal - removedCost
+                val profitPct = if (removedCost > 1e-9) (profit / removedCost) * 100.0 else 0.0
+
+                sells.add(
+                    TransactionSummary(
+                        ticker = tx.ticker,
+                        quantity = tx.quantity,
+                        pricePerShare = tx.pricePerShare,
+                        netTotal = tx.netTotal,
+                        profitLoss = profit,
+                        profitLossPercent = profitPct,
+                        timestamp = tx.timestamp.toString().take(19)
+                    )
+                )
+            }
         }
-
-    // Calcular beneficio de cada venta (revenue NETO: lo que realmente entra tras comisión)
-    val sellSummaries = sells.map { sell ->
-        val avgBuyPrice = avgBuyPrices[sell.ticker] ?: sell.pricePerShare
-        val costBasis = avgBuyPrice * sell.quantity
-        val revenue = sell.netTotal
-        val profitLoss = revenue - costBasis
-        val profitLossPercent = if (costBasis > 0) (profitLoss / costBasis) * 100.0 else 0.0
-
-        TransactionSummary(
-            id = sell.id,
-            ticker = sell.ticker,
-            quantity = sell.quantity,
-            pricePerShare = sell.pricePerShare,
-            netTotal = sell.netTotal,
-            profitLoss = profitLoss,
-            profitLossPercent = profitLossPercent,
-            timestamp = sell.timestamp.toString()
-        )
     }
 
-    val bestTx = sellSummaries.maxByOrNull { it.profitLoss }
-    val worstTx = sellSummaries.minByOrNull { it.profitLoss }
+    val best = sells.maxByOrNull { it.profitLoss }
+    val worst = sells.minByOrNull { it.profitLoss }
 
-    // === 2. ACCIÓN MÁS RENTABLE ===
-    val mostProfitable = positions.maxByOrNull { it.pnlPercent }?.let {
-        StockProfitability(
-            ticker = it.ticker,
-            quantity = it.quantity,
-            invested = it.invested,
-            currentValue = it.valueNow,
-            pnlEuro = it.pnlEuro,
-            pnlPercent = it.pnlPercent
-        )
-    }
+    val totalSells = sells.size
+    val profitableSells = sells.count { it.profitLoss > 0.0001 }
+    val successRate = if (totalSells > 0) profitableSells.toDouble() / totalSells.toDouble() * 100.0 else 0.0
 
-    // === 3. TASA DE ÉXITO ===
-    val profitableSells = sellSummaries.count { it.profitLoss > 0 }
-    val totalSells = sellSummaries.size
-    val successRate = if (totalSells > 0) {
-        (profitableSells.toDouble() / totalSells) * 100.0
-    } else 0.0
+    val mostProfitableStock = positions
+        .map {
+            StockProfitability(
+                ticker = it.ticker,
+                quantity = it.quantity,
+                invested = it.invested,
+                currentValue = it.valueNow,
+                pnlEuro = it.pnlEuro,
+                pnlPercent = it.pnlPercent
+            )
+        }
+        .maxByOrNull { it.pnlPercent }
 
-    // === 4. RENTABILIDAD MEDIA ===
-    val avgProfitability = if (positions.isNotEmpty()) {
-        positions.map { it.pnlPercent }.average()
-    } else 0.0
+    val totalInvested = positions.sumOf { it.invested }
+    val totalPnl = positions.sumOf { it.pnlEuro }
+    val avgProfitability = if (totalInvested > 1e-9) (totalPnl / totalInvested) * 100.0 else 0.0
 
     return PortfolioStatistics(
-        bestTransaction = bestTx,
-        worstTransaction = worstTx,
-        mostProfitableStock = mostProfitable,
+        bestTransaction = best,
+        worstTransaction = worst,
+        mostProfitableStock = mostProfitableStock,
         successRate = successRate,
-        totalSells = totalSells,
         profitableSells = profitableSells,
+        totalSells = totalSells,
         averageProfitability = avgProfitability,
         totalPositions = positions.size
     )
