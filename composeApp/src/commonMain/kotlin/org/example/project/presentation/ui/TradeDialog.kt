@@ -116,9 +116,12 @@ fun TradeDialog(
                 }
 
                 // =========================
-                // Error (si lo hay) — pero NO lo enseñamos si el campo está vacío
+                // ✅ Error (si lo hay)
+                // - NO lo enseñamos si el campo está vacío
+                // - NO lo enseñamos si ya hay operación realizada (lastTx != null)
                 // =========================
-                if (!qtyBlank && vm.error != null) {
+                val showError = !qtyBlank && vm.error != null && vm.lastTx == null
+                if (showError) {
                     val errShape = RoundedCornerShape(14.dp)
                     Card(
                         shape = errShape,
@@ -200,7 +203,8 @@ fun TradeDialog(
                             }
                         }
                     }
-                } else {
+                } else if (vm.lastTx == null) {
+                    // ✅ Solo mostramos el texto de ayuda si NO hay operación realizada
                     Text(
                         text = if (qtyBlank) {
                             "Introduce una cantidad para ver el cálculo."
@@ -254,7 +258,8 @@ fun TradeDialog(
         },
 
         confirmButton = {
-            val canConfirm = (vm.preview != null) && (vm.error == null) && !vm.isBusy
+            // ✅ No confirmes si ya hay lastTx (evita doble confirmación)
+            val canConfirm = (vm.preview != null) && (vm.error == null) && !vm.isBusy && (vm.lastTx == null)
             TextButton(
                 onClick = { vm.confirm() },
                 enabled = canConfirm

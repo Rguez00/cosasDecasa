@@ -28,7 +28,9 @@ data class PortfolioState(
 
     // PnL global SOLO holdings: holdingsValue - totalInvested (lo calcula el repo)
     val pnlEuro: Double = 0.0,
-    val pnlPercent: Double = 0.0
+    val pnlPercent: Double = 0.0,
+    val profitBars: List<ProfitBarPoint> = emptyList()
+
 ) {
     init {
         require(cash.isFinite()) { "PortfolioState.cash debe ser finito" }

@@ -48,7 +48,8 @@ class InMemoryPortfolioRepository(
             transactions = emptyList(),
             portfolioValue = cash,
             pnlEuro = 0.0,
-            pnlPercent = 0.0
+            pnlPercent = 0.0,
+            profitBars = emptyList() // 👈 NUEVO
         )
     )
     override val portfolioState: StateFlow<PortfolioState> = _portfolioState
@@ -109,7 +110,18 @@ class InMemoryPortfolioRepository(
         val t = normalizeTicker(ticker)
         if (quantity <= 0) return Result.failure(InvalidQuantity(quantity))
 
-        val owned = mutex.withLock { holdingsMap[t]?.quantity ?: 0 }
+        val owned = mutex.withLock {
+            // 1) Fuente principal: holdingsMap (ticker normalizado)
+            holdingsMap[t]?.quantity
+            // 2) Fallback: snapshot (por si hay cualquier desajuste temporal)
+                ?: buildSnapshotLocked()
+                    .positions
+                    .firstOrNull { it.ticker == t }
+                    ?.quantity
+                ?: 0
+        }
+
+        // ✅ Permitimos vender EXACTAMENTE lo que tienes (owned == quantity es válido)
         if (owned < quantity) return Result.failure(InsufficientHoldings(t, quantity, owned))
 
         val snap = marketRepo.getSnapshot(t) ?: return Result.failure(UnknownTicker(t))
@@ -130,6 +142,7 @@ class InMemoryPortfolioRepository(
             )
         )
     }
+
 
     override suspend fun buy(ticker: String, quantity: Int): Result<Transaction> {
         val t = normalizeTicker(ticker)
@@ -264,6 +277,15 @@ class InMemoryPortfolioRepository(
 
     private fun emitPortfolioStateLocked() {
         val snap = buildSnapshotLocked()
+
+        // Barras: P/L (€) por acción
+        // - Ordenamos por valor absoluto para que se vean las más “importantes”
+        // - Limitamos a 12 para que el gráfico no quede ilegible
+        val bars = snap.positions
+            .map { p -> org.example.project.presentation.state.ProfitBarPoint(p.ticker, p.pnlEuro) }
+            .sortedByDescending { kotlin.math.abs(it.valueEuro) }
+            .take(12)
+
         _portfolioState.value = PortfolioState(
             cash = snap.cash,
             holdings = snap.holdings,
@@ -271,7 +293,8 @@ class InMemoryPortfolioRepository(
             transactions = transactions.toList(),
             portfolioValue = snap.portfolioValue,
             pnlEuro = snap.pnlEuro,
-            pnlPercent = snap.pnlPercent
+            pnlPercent = snap.pnlPercent,
+            profitBars = bars // 👈 NUEVO
         )
     }
 

@@ -33,6 +33,11 @@ import org.example.project.domain.model.StockSnapshot
 import org.example.project.presentation.state.MarketState
 import org.example.project.presentation.state.PortfolioState
 import kotlin.math.abs
+import org.example.project.presentation.charts.ProfitBarChart
+import org.example.project.presentation.charts.BarItem
+import org.example.project.presentation.charts.PieChart
+import org.example.project.presentation.charts.PieSlice
+
 
 @Composable
 internal fun MainCard(
@@ -74,10 +79,11 @@ internal fun MainCard(
     onExportPortfolioCsv: () -> Unit,
     statistics: PortfolioStatistics
 ) {
+    val bars = portfolioState.profitBars
     val shape = RoundedCornerShape(20.dp)
 
     Card(
-        modifier = modifier,
+        modifier = modifier.fillMaxSize(),
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = p.surface0),
         elevation = CardDefaults.cardElevation(0.dp)
@@ -517,99 +523,174 @@ internal fun MainCard(
                 }
 
                 // =========================================================
-                // CHARTS (✅ IMPLEMENTADO)
-                // =========================================================
+// CHARTS (✅ IMPLEMENTADO + BARRAS)
+// =========================================================
                 AppTab.CHARTS -> {
                     val tickers = marketState.stocks.map { it.ticker }
                     val pointsPrice = priceHistory[selectedTicker].orEmpty()
                     val pointsValue = valueHistory
 
-                    Column(modifier = Modifier.fillMaxSize()) {
+                    val barItems = bars.map { BarItem(label = it.ticker, value = it.valueEuro) }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Gráficos", color = p.textStrong, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            Text(
-                                "Ticker: $selectedTicker",
-                                color = p.textSoft,
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                    val slicesBySector = run {
+                        val sectorByTicker = marketState.stocks.associate { it.ticker.uppercase() to it.sector }
 
-                        Spacer(Modifier.height(8.dp))
+                        val bySector: Map<String, Double> = portfolioState.positions
+                            .groupBy { pos ->
+                                val key = pos.ticker.uppercase()
+                                sectorByTicker[key]?.toString() ?: "Desconocido"
+                            }
+                            .mapValues { (_, positions) -> positions.sumOf { it.valueNow } }
 
-                        // selector simple (chips)
-                        FlowRowCompat(
-                            modifier = Modifier.fillMaxWidth(),
-                            mainAxisSpacing = 8.dp,
-                            crossAxisSpacing = 8.dp
-                        ) {
-                            tickers.take(12).forEach { t ->
-                                val selected = t == selectedTicker
-                                SmallChip(
-                                    text = t,
-                                    selected = selected,
-                                    bg = if (selected) p.brand else p.surface2,
-                                    fg = if (selected) Color(0xFF001018) else p.textSoft,
-                                    stroke = if (selected) p.brand.copy(alpha = 0.45f) else p.strokeSoft,
-                                    onClick = { onSelectTicker(t) }
+                        val palette = listOf(
+                            p.brand,
+                            p.brand2,
+                            p.success,
+                            p.danger,
+                            p.neutral,
+                            p.brand.copy(alpha = 0.75f),
+                            p.brand2.copy(alpha = 0.75f)
+                        )
+
+                        bySector.entries
+                            .sortedByDescending { it.value }
+                            .mapIndexed { i, e ->
+                                PieSlice(
+                                    label = e.key,
+                                    value = e.value,
+                                    color = palette[i % palette.size]
                                 )
                             }
-                            if (tickers.size > 12) {
-                                SmallChip(
-                                    text = "+${tickers.size - 12}",
-                                    selected = false,
-                                    bg = p.surface2,
-                                    fg = p.textMuted,
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(sectionGap),
+                        contentPadding = PaddingValues(bottom = 12.dp)
+                    ) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Gráficos",
+                                    color = p.textStrong,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    "Ticker: $selectedTicker",
+                                    color = p.textSoft,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+
+                        item {
+                            FlowRowCompat(
+                                modifier = Modifier.fillMaxWidth(),
+                                mainAxisSpacing = 8.dp,
+                                crossAxisSpacing = 8.dp
+                            ) {
+                                tickers.take(12).forEach { t ->
+                                    val selected = t == selectedTicker
+                                    SmallChip(
+                                        text = t,
+                                        selected = selected,
+                                        bg = if (selected) p.brand else p.surface2,
+                                        fg = if (selected) Color(0xFF001018) else p.textSoft,
+                                        stroke = if (selected) p.brand.copy(alpha = 0.45f) else p.strokeSoft,
+                                        onClick = { onSelectTicker(t) }
+                                    )
+                                }
+                                if (tickers.size > 12) {
+                                    SmallChip(
+                                        text = "+${tickers.size - 12}",
+                                        selected = false,
+                                        bg = p.surface2,
+                                        fg = p.textMuted,
+                                        stroke = p.strokeSoft,
+                                        onClick = { }
+                                    )
+                                }
+                            }
+                        }
+
+                        item {
+                            ChartCard(
+                                title = "Precio · $selectedTicker",
+                                subtitle = chartSubtitle(pointsPrice, suffix = "€"),
+                                p = p,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(250.dp)
+                            ) {
+                                LineChart(
+                                    points = pointsPrice,
+                                    line = p.brand2,
                                     stroke = p.strokeSoft,
-                                    onClick = { /* opcional: abrir dialog selector */ }
+                                    inner = p.surface2,
+                                    textSoft = p.textSoft,
+                                    textMuted = p.textMuted
                                 )
                             }
                         }
 
-                        Spacer(Modifier.height(sectionGap))
-
-                        ChartCard(
-                            title = "Precio · $selectedTicker",
-                            subtitle = chartSubtitle(pointsPrice, suffix = "€"),
-                            p = p,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(0.55f)
-                        ) {
-                            LineChart(
-                                points = pointsPrice,
-                                line = p.brand2,
-                                stroke = p.strokeSoft,
-                                inner = p.surface2,
-                                textSoft = p.textSoft,
-                                textMuted = p.textMuted
-                            )
+                        item {
+                            ChartCard(
+                                title = "Distribución del portfolio por sector",
+                                subtitle = if (slicesBySector.isEmpty()) "Sin posiciones" else "Reparto por valor actual",
+                                p = p,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(260.dp)
+                            ) {
+                                PieChart(
+                                    slices = slicesBySector,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(6.dp)
+                                )
+                            }
                         }
 
-                        Spacer(Modifier.height(sectionGap))
+                        item {
+                            ChartCard(
+                                title = "Beneficio / Pérdida por acción",
+                                subtitle = if (barItems.isEmpty()) "Sin posiciones" else "Top ${barItems.size} por impacto",
+                                p = p,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(220.dp)
+                            ) {
+                                ProfitBarChart(items = barItems)
+                            }
+                        }
 
-                        ChartCard(
-                            title = "Valor total portfolio",
-                            subtitle = chartSubtitle(pointsValue, suffix = "€"),
-                            p = p,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(0.45f)
-                        ) {
-                            LineChart(
-                                points = pointsValue,
-                                line = p.brand,
-                                stroke = p.strokeSoft,
-                                inner = p.surface2,
-                                textSoft = p.textSoft,
-                                textMuted = p.textMuted
-                            )
+                        item {
+                            ChartCard(
+                                title = "Valor total portfolio",
+                                subtitle = chartSubtitle(pointsValue, suffix = "€"),
+                                p = p,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(250.dp)
+                            ) {
+                                LineChart(
+                                    points = pointsValue,
+                                    line = p.brand,
+                                    stroke = p.strokeSoft,
+                                    inner = p.surface2,
+                                    textSoft = p.textSoft,
+                                    textMuted = p.textMuted
+                                )
+                            }
                         }
                     }
                 }
+
+
 
                 // =========================================================
                 // ALERTS
@@ -647,128 +728,135 @@ internal fun MainCard(
                     val valueNow = portfolioState.positions.sumOf { it.valueNow }
                     val totalValue = portfolioState.cash + valueNow
 
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("📊 Estadísticas", color = p.textStrong, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            Text("Posiciones: ${statistics.totalPositions}", color = p.textSoft, style = MaterialTheme.typography.labelSmall)
-                        }
-
-                        Spacer(Modifier.height(10.dp))
-
-                        // métricas arriba (tipo dashboard)
-                        FlowRowCompat(
-                            modifier = Modifier.fillMaxWidth(),
-                            mainAxisSpacing = 10.dp,
-                            crossAxisSpacing = 10.dp
-                        ) {
-                            StatMini(
-                                title = "Ventas con beneficio",
-                                value = "${statistics.profitableSells}/${statistics.totalSells}",
-                                p = p
-                            )
-                            StatMini(
-                                title = "Tasa de éxito",
-                                value = "${fmt2(statistics.successRate)}%",
-                                p = p
-                            )
-                            StatMini(
-                                title = "Rentabilidad media",
-                                value = "${fmt2(statistics.averageProfitability)}%",
-                                p = p
-                            )
-                            StatMini(
-                                title = "PnL actual",
-                                value = "${fmt2(portfolioState.pnlEuro)}€",
-                                valueColor = when {
-                                    portfolioState.pnlEuro > 0.0001 -> p.success
-                                    portfolioState.pnlEuro < -0.0001 -> p.danger
-                                    else -> p.neutral
-                                },
-                                p = p
-                            )
-                        }
-
-                        Spacer(Modifier.height(sectionGap))
-
-                        // desglose financiero
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = p.surface1),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(0.55f)
-                        ) {
-                            Column(
-                                Modifier
-                                    .fillMaxSize()
-                                    .border(1.dp, p.strokeSoft, RoundedCornerShape(16.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Text("Resumen", color = p.textStrong, fontWeight = FontWeight.SemiBold)
-                                Spacer(Modifier.height(10.dp))
-                                Divider(color = p.strokeSoft)
-                                Spacer(Modifier.height(10.dp))
-
-                                StatRow("Saldo", "${fmt2(portfolioState.cash)} €", p)
-                                StatRow("Invertido", "${fmt2(invested)} €", p)
-                                StatRow("Valor posiciones", "${fmt2(valueNow)} €", p)
-                                StatRow("Valor total", "${fmt2(totalValue)} €", p)
-
-                                Spacer(Modifier.height(10.dp))
-                                Divider(color = p.strokeSoft)
-                                Spacer(Modifier.height(10.dp))
-
-                                val signPct = if (portfolioState.pnlPercent >= 0) "+" else ""
-                                StatRow(
-                                    "PnL (%)",
-                                    "$signPct${fmt2(portfolioState.pnlPercent)}%",
-                                    p,
-                                    valueColor = when {
-                                        portfolioState.pnlPercent > 0.0001 -> p.success
-                                        portfolioState.pnlPercent < -0.0001 -> p.danger
-                                        else -> p.neutral
-                                    }
-                                )
-
-                                Spacer(Modifier.weight(1f))
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(sectionGap),
+                        contentPadding = PaddingValues(bottom = 12.dp)
+                    ) {
+                        item {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    "Tip: usa CHARTS para ver evolución de precio y valor.",
-                                    color = p.textMuted,
+                                    "📊 Estadísticas",
+                                    color = p.textStrong,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    "Posiciones: ${statistics.totalPositions}",
+                                    color = p.textSoft,
                                     style = MaterialTheme.typography.labelSmall
                                 )
                             }
                         }
 
-                        Spacer(Modifier.height(sectionGap))
-
-                        // mejores / peores
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = p.surface1),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(0.45f)
-                        ) {
-                            Column(
-                                Modifier
-                                    .fillMaxSize()
-                                    .border(1.dp, p.strokeSoft, RoundedCornerShape(16.dp))
-                                    .padding(12.dp)
+                        item {
+                            FlowRowCompat(
+                                modifier = Modifier.fillMaxWidth(),
+                                mainAxisSpacing = 10.dp,
+                                crossAxisSpacing = 10.dp
                             ) {
-                                Text("Mejores / Peores", color = p.textStrong, fontWeight = FontWeight.SemiBold)
-                                Spacer(Modifier.height(10.dp))
-                                Divider(color = p.strokeSoft)
-                                Spacer(Modifier.height(10.dp))
+                                StatMini(
+                                    title = "Ventas con beneficio",
+                                    value = "${statistics.profitableSells}/${statistics.totalSells}",
+                                    p = p
+                                )
+                                StatMini(
+                                    title = "Tasa de éxito",
+                                    value = "${fmt2(statistics.successRate)}%",
+                                    p = p
+                                )
+                                StatMini(
+                                    title = "Rentabilidad media",
+                                    value = "${fmt2(statistics.averageProfitability)}%",
+                                    p = p
+                                )
+                                StatMini(
+                                    title = "PnL actual",
+                                    value = "${fmt2(portfolioState.pnlEuro)}€",
+                                    valueColor = when {
+                                        portfolioState.pnlEuro > 0.0001 -> p.success
+                                        portfolioState.pnlEuro < -0.0001 -> p.danger
+                                        else -> p.neutral
+                                    },
+                                    p = p
+                                )
+                            }
+                        }
 
-                                StatRow("Mejor venta", statistics.bestTransaction?.ticker ?: "--", p)
-                                StatRow("Peor venta", statistics.worstTransaction?.ticker ?: "--", p)
-                                StatRow("Acción más rentable", statistics.mostProfitableStock?.ticker ?: "--", p)
+                        item {
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = p.surface1),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .border(1.dp, p.strokeSoft, RoundedCornerShape(16.dp))
+                                        .padding(12.dp)
+                                ) {
+                                    Text("Resumen", color = p.textStrong, fontWeight = FontWeight.SemiBold)
+                                    Spacer(Modifier.height(10.dp))
+                                    Divider(color = p.strokeSoft)
+                                    Spacer(Modifier.height(10.dp))
 
-                                Spacer(Modifier.weight(1f))
+                                    StatRow("Saldo", "${fmt2(portfolioState.cash)} €", p)
+                                    StatRow("Invertido", "${fmt2(invested)} €", p)
+                                    StatRow("Valor posiciones", "${fmt2(valueNow)} €", p)
+                                    StatRow("Valor total", "${fmt2(totalValue)} €", p)
+
+                                    Spacer(Modifier.height(10.dp))
+                                    Divider(color = p.strokeSoft)
+                                    Spacer(Modifier.height(10.dp))
+
+                                    val signPct = if (portfolioState.pnlPercent >= 0) "+" else ""
+                                    StatRow(
+                                        "PnL (%)",
+                                        "$signPct${fmt2(portfolioState.pnlPercent)}%",
+                                        p,
+                                        valueColor = when {
+                                            portfolioState.pnlPercent > 0.0001 -> p.success
+                                            portfolioState.pnlPercent < -0.0001 -> p.danger
+                                            else -> p.neutral
+                                        }
+                                    )
+
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "Tip: usa CHARTS para ver evolución de precio y valor.",
+                                        color = p.textMuted,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
+
+                        item {
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = p.surface1),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .border(1.dp, p.strokeSoft, RoundedCornerShape(16.dp))
+                                        .padding(12.dp)
+                                ) {
+                                    Text("Mejores / Peores", color = p.textStrong, fontWeight = FontWeight.SemiBold)
+                                    Spacer(Modifier.height(10.dp))
+                                    Divider(color = p.strokeSoft)
+                                    Spacer(Modifier.height(10.dp))
+
+                                    StatRow("Mejor venta", statistics.bestTransaction?.ticker ?: "--", p)
+                                    StatRow("Peor venta", statistics.worstTransaction?.ticker ?: "--", p)
+                                    StatRow("Acción más rentable", statistics.mostProfitableStock?.ticker ?: "--", p)
+                                }
                             }
                         }
                     }
                 }
+
             }
         }
     }
